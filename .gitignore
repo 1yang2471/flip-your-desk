@@ -17,6 +17,7 @@ src-tauri/gen/
 Thumbs.db
 .mimosa/
 .video_agent/
+.superpowers/
 
 # 应用运行期数据（不应进仓库）
 *.bak

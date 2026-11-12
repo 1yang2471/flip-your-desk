@@ -131,14 +131,14 @@ export class OverlayGame {
     hud.appendChild(progress);
 
     const time = h("div", "hud-stat");
-    time.appendChild(iconEl("clock", 14));
+    time.appendChild(iconEl("clock", 12));
     this.hudTime = h("span", "hud-value", "00:00");
     time.appendChild(this.hudTime);
     time.title = t(this.lang, "overlay.timeLabel");
     hud.appendChild(time);
 
     const moves = h("div", "hud-stat");
-    moves.appendChild(iconEl("move", 14));
+    moves.appendChild(iconEl("move", 12));
     this.hudMoves = h("span", "hud-value", "0");
     moves.appendChild(this.hudMoves);
     moves.title = t(this.lang, pluralKey("overlay.moves", 0), { n: 0 });
@@ -149,7 +149,7 @@ export class OverlayGame {
     mute.appendChild(iconEl(this.state.muted ? "mute" : "volume", 14));
     const syncMute = () => {
       clear(mute);
-      mute.appendChild(iconEl(this.state.muted ? "mute" : "volume", 14));
+      mute.appendChild(iconEl(this.state.muted ? "mute" : "volume", 12));
       mute.title = t(
         this.lang,
         this.state.muted ? "launcher.unmute" : "launcher.mute",
@@ -173,13 +173,15 @@ export class OverlayGame {
 
     const exit = h("button", "hud-button");
     exit.type = "button";
-    exit.appendChild(iconEl("close", 14));
+    exit.appendChild(iconEl("close", 12));
     exit.title = t(this.lang, "overlay.esc");
     exit.setAttribute("aria-label", t(this.lang, "overlay.esc"));
     exit.addEventListener("click", () => this.showExitConfirm());
     hud.appendChild(exit);
 
-    this.hudWrap.appendChild(hud);
+    const row = h("div", "hud-row");
+    row.appendChild(hud);
+    this.hudWrap.appendChild(row);
 
     this.hudHint = h("div", "hud-hint");
     this.hudHint.hidden = true;
@@ -212,7 +214,7 @@ export class OverlayGame {
           this.sounds.error();
         });
     });
-    this.root.appendChild(this.confirmButton);
+    row.appendChild(this.confirmButton);
   }
 
   private buildBoard(): void {
@@ -914,23 +916,12 @@ export class OverlayGame {
 
   private placeFloating(): void {
     if (!this.hudWrap) return;
-    const slots = this.view.slots;
-    this.placeElement(this.hudWrap, slots, "hud");
-    if (!this.confirmButton.hidden) {
-      this.placeElement(
-        this.confirmButton,
-        slots,
-        "confirm",
-        this.hudWrap.getBoundingClientRect(),
-      );
-    }
+    this.placeElement(this.hudWrap, this.view.slots);
   }
 
   private placeElement(
     element: HTMLElement,
     slots: SlotView[],
-    kind: "hud" | "confirm",
-    avoid?: DOMRect,
   ): void {
     const rect = element.getBoundingClientRect();
     const width = rect.width || 320;
@@ -938,22 +929,14 @@ export class OverlayGame {
     const margin = 20;
     const viewportWidth = window.innerWidth;
     const viewportHeight = window.innerHeight;
-    const candidates: { x: number; y: number }[] =
-      kind === "hud"
-        ? [
-            { x: (viewportWidth - width) / 2, y: viewportHeight - height - margin },
-            { x: (viewportWidth - width) / 2, y: margin },
-            { x: margin, y: viewportHeight - height - margin },
-            { x: viewportWidth - width - margin, y: viewportHeight - height - margin },
-            { x: margin, y: margin },
-            { x: viewportWidth - width - margin, y: margin },
-          ]
-        : [
-            { x: (viewportWidth - width) / 2, y: viewportHeight - height - margin },
-            { x: (viewportWidth - width) / 2, y: margin },
-            { x: margin, y: viewportHeight - height - margin },
-            { x: viewportWidth - width - margin, y: viewportHeight - height - margin },
-          ];
+    const candidates = [
+      { x: (viewportWidth - width) / 2, y: viewportHeight - height - margin },
+      { x: (viewportWidth - width) / 2, y: margin },
+      { x: margin, y: viewportHeight - height - margin },
+      { x: viewportWidth - width - margin, y: viewportHeight - height - margin },
+      { x: margin, y: margin },
+      { x: viewportWidth - width - margin, y: margin },
+    ];
     let best = candidates[0];
     let bestOverlap = Number.POSITIVE_INFINITY;
     for (const candidate of candidates) {
@@ -968,19 +951,6 @@ export class OverlayGame {
           Math.min(candidate.y + height, slot.y + slot.h) - Math.max(candidate.y, slot.y),
         );
         overlap += overlapX * overlapY;
-      }
-      if (avoid) {
-        const overlapX = Math.max(
-          0,
-          Math.min(candidate.x + width, avoid.left + avoid.width) -
-            Math.max(candidate.x, avoid.left),
-        );
-        const overlapY = Math.max(
-          0,
-          Math.min(candidate.y + height, avoid.top + avoid.height) -
-            Math.max(candidate.y, avoid.top),
-        );
-        overlap += overlapX * overlapY * 8;
       }
       if (overlap < bestOverlap) {
         bestOverlap = overlap;

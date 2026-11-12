@@ -684,22 +684,27 @@ button {
   transition: transform 260ms var(--ease);
 }
 
+.hud-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .hud {
   display: flex;
   align-items: center;
-  gap: 14px;
-  padding: 9px 12px;
-  border-radius: 14px;
+  gap: 10px;
+  padding: 3px 6px 3px 12px;
+  border-radius: 999px;
   background: rgba(16, 18, 22, 0.86);
   border: 1px solid rgba(255, 255, 255, 0.12);
-  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.35);
-  backdrop-filter: blur(14px) saturate(0.9);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.28);
 }
 
 .hud-progress {
-  display: grid;
-  gap: 6px;
-  min-width: 86px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
 }
 
 .hud-progress-text {
@@ -710,7 +715,8 @@ button {
 
 .hud-progress-track {
   display: block;
-  height: 3px;
+  width: 48px;
+  height: 2px;
   border-radius: 2px;
   background: rgba(255, 255, 255, 0.14);
   overflow: hidden;
@@ -727,7 +733,7 @@ button {
 .hud-stat {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
   color: var(--text-3);
 }
 
@@ -740,11 +746,11 @@ button {
 .hud-button {
   display: grid;
   place-items: center;
-  width: 28px;
-  height: 28px;
+  width: 24px;
+  height: 24px;
   padding: 0;
   border: 0;
-  border-radius: 8px;
+  border-radius: 50%;
   background: transparent;
   color: var(--text-2);
   cursor: pointer;
@@ -769,21 +775,17 @@ button {
 }
 
 .confirm-button {
-  position: absolute;
-  top: 0;
-  left: 0;
-  z-index: 45;
-  min-height: 40px;
-  padding: 0 22px;
+  min-height: 30px;
+  padding: 0 14px;
   border: 0;
-  border-radius: 12px;
+  border-radius: 999px;
   background: var(--accent);
   color: var(--accent-ink);
-  font-size: 14px;
+  font-size: 12px;
   font-weight: 600;
   cursor: pointer;
-  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.32);
-  transition: transform 260ms var(--ease), background-color 140ms var(--ease);
+  flex: none;
+  transition: background-color 140ms var(--ease);
 }
 
 .confirm-button:hover {
