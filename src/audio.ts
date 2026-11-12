@@ -95,9 +95,19 @@ export class Sounds {
     this.noise(0.028, 0.025, 900);
   }
 
-  finish(): void {
-    this.tone(523.25, 0.5, 0.035, "triangle");
-    this.tone(783.99, 0.6, 0.03, "triangle", 0.12);
+  finish(accuracy = 100): void {
+    if (accuracy >= 50) {
+      this.tone(523.25, 0.3, 0.035, "triangle");
+      this.tone(659.25, 0.3, 0.035, "triangle", 0.1);
+      this.tone(783.99, 0.32, 0.035, "triangle", 0.2);
+      this.tone(1046.5, 0.55, 0.03, "triangle", 0.3);
+    } else if (accuracy >= 20) {
+      this.tone(523.25, 0.5, 0.035, "triangle");
+      this.tone(783.99, 0.6, 0.03, "triangle", 0.12);
+    } else {
+      this.tone(392, 0.5, 0.03, "sine");
+      this.tone(329.63, 0.6, 0.025, "sine", 0.14);
+    }
   }
 
   error(): void {

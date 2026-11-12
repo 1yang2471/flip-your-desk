@@ -199,7 +199,6 @@ export class OverlayGame {
         .then(() => {
           this.pending = false;
           this.confirmButton.disabled = false;
-          this.sounds.finish();
         })
         .catch((error) => {
           this.pending = false;
@@ -661,6 +660,25 @@ export class OverlayGame {
     this.clearSelection();
   }
 
+  // ------------------------------------------------------- reveal effects
+
+  private animateCountUp(element: HTMLElement, target: number): void {
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      element.textContent = String(target);
+      return;
+    }
+    const start = performance.now();
+    const duration = 650;
+    const tick = (now: number) => {
+      if (!element.isConnected) return;
+      const progress = Math.min(1, (now - start) / duration);
+      const eased = 1 - Math.pow(1 - progress, 3);
+      element.textContent = String(Math.round(target * eased));
+      if (progress < 1) window.requestAnimationFrame(tick);
+    };
+    window.requestAnimationFrame(tick);
+  }
+
   // --------------------------------------------------------------- modals
 
   private showResult(result: RoundResult): void {
@@ -675,7 +693,8 @@ export class OverlayGame {
     const figure = h("div", "result-figure");
     figure.appendChild(h("span", "result-label", t(this.lang, "result.accuracy")));
     const number = h("span", "result-value");
-    number.appendChild(h("span", "result-number", String(result.accuracy)));
+    const digit = h("span", "result-number", "0");
+    number.appendChild(digit);
     number.appendChild(h("span", "result-unit", "%"));
     figure.appendChild(number);
     figure.appendChild(
@@ -685,6 +704,8 @@ export class OverlayGame {
       })),
     );
     panel.appendChild(figure);
+    this.sounds.finish(result.accuracy);
+    this.animateCountUp(digit, result.accuracy);
 
     const stats = h("div", "result-stats");
     const timeStat = h("span", "result-stat");

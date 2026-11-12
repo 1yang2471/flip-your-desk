@@ -792,6 +792,30 @@ button {
   background: #eec06c;
 }
 
+.confirm-button {
+  animation: chip-pop 260ms var(--ease);
+}
+
+@keyframes chip-pop {
+  from {
+    transform: scale(0.6);
+    opacity: 0;
+  }
+  60% {
+    transform: scale(1.08);
+  }
+  to {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .confirm-button {
+    animation: none;
+  }
+}
+
 /* 作者样式会覆盖 UA 的 [hidden]：显式补回，否则隐藏的弹窗层仍铺满全屏拦截点击 */
 [hidden] {
   display: none !important;
