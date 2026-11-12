@@ -192,12 +192,6 @@ impl Round {
             .collect::<Vec<_>>();
         Ok(OverlayView {
             is_primary: monitor.primary,
-            wallpaper: self
-                .snapshot
-                .wallpaper
-                .get(monitor_index)
-                .cloned()
-                .flatten(),
             slots,
             global_slots,
             icons,
@@ -309,7 +303,6 @@ pub fn mock_snapshot(monitors: &[MonitorInfo]) -> Snapshot {
     let Some(primary) = primary else {
         return Snapshot {
             icons: Vec::new(),
-            wallpaper: Vec::new(),
             monitors: monitors.to_vec(),
             fingerprint: "mock-empty".into(),
         };
@@ -335,10 +328,8 @@ pub fn mock_snapshot(monitors: &[MonitorInfo]) -> Snapshot {
             }
         })
         .collect::<Vec<_>>();
-    let wallpaper = monitors.iter().map(|_| None).collect();
     Snapshot {
         icons,
-        wallpaper,
         monitors: monitors.to_vec(),
         fingerprint: "mock".into(),
     }

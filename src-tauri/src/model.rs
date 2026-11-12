@@ -69,7 +69,6 @@ pub struct IconRecord {
 #[serde(rename_all = "camelCase")]
 pub struct Snapshot {
     pub icons: Vec<IconRecord>,
-    pub wallpaper: Vec<Option<String>>,
     pub monitors: Vec<MonitorInfo>,
     pub fingerprint: String,
 }
@@ -154,7 +153,6 @@ pub struct GlobalSlotView {
 pub struct OverlayView {
     pub monitor: MonitorInfo,
     pub is_primary: bool,
-    pub wallpaper: Option<String>,
     pub slots: Vec<SlotView>,
     pub global_slots: Vec<GlobalSlotView>,
     pub icons: Vec<IconView>,

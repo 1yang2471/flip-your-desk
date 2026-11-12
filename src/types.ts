@@ -74,7 +74,6 @@ export interface PublicState {
 export interface OverlayView {
   monitor: MonitorInfo;
   isPrimary: boolean;
-  wallpaper: string | null;
   slots: SlotView[];
   globalSlots: GlobalSlotView[];
   icons: IconView[];

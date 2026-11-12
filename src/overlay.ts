@@ -88,14 +88,10 @@ export class OverlayGame {
   private buildShell(): void {
     clear(this.root);
     this.root.classList.add("overlay-root");
-    if (this.view.wallpaper) {
-      this.root.style.backgroundImage = `url("${this.view.wallpaper}")`;
-      this.root.style.backgroundSize = "100% 100%";
-    } else if (this.view.mock) {
+    if (this.view.mock) {
+      // 演示窗保留自己的渐变背景；真实模式保持透明，真桌面从卡牌间隙透出。
       this.root.style.backgroundImage =
         "linear-gradient(140deg, #1b1f27 0%, #23222a 45%, #2b2419 100%)";
-    } else {
-      this.root.style.backgroundColor = "#191c21";
     }
 
     this.board = h("div", "board");
@@ -252,16 +248,6 @@ export class OverlayGame {
         this.showExitConfirm();
       }
       return;
-    }
-    if (this.selectedIcon === null) return;
-    if (event.key === "ArrowLeft" || event.key === "ArrowRight" || event.key === "ArrowUp" || event.key === "ArrowDown") {
-      event.preventDefault();
-      this.moveTarget(event.key);
-      return;
-    }
-    if (event.key === "Enter" || event.key === " ") {
-      event.preventDefault();
-      this.commitSelection();
     }
   }
 
@@ -634,49 +620,7 @@ export class OverlayGame {
     this.selectedIcon = null;
     this.selectedSlot = null;
     this.targetSlot = null;
-    this.board.querySelectorAll(".is-kb-target").forEach((element) => {
-      element.classList.remove("is-kb-target");
-    });
     this.hudHint.hidden = true;
-  }
-
-  private moveTarget(direction: string): void {
-    if (this.targetSlot === null) return;
-    const current = this.slots.get(this.targetSlot);
-    if (!current) return;
-    const originX = current.x + current.w / 2;
-    const originY = current.y + current.h / 2;
-    let best: { slot: SlotView; score: number } | null = null;
-    for (const slot of this.view.slots) {
-      if (slot.id === current.id) continue;
-      const dx = slot.x + slot.w / 2 - originX;
-      const dy = slot.y + slot.h / 2 - originY;
-      const forward =
-        direction === "ArrowLeft"
-          ? -dx
-          : direction === "ArrowRight"
-            ? dx
-            : direction === "ArrowUp"
-              ? -dy
-              : dy;
-      const sideways =
-        direction === "ArrowLeft" || direction === "ArrowRight"
-          ? Math.abs(dy)
-          : Math.abs(dx);
-      if (forward <= 2) continue;
-      const score = forward + sideways * 2;
-      if (!best || score < best.score) best = { slot, score };
-    }
-    if (!best) return;
-    this.targetSlot = best.slot.id;
-    this.board.querySelectorAll(".is-kb-target").forEach((element) => {
-      element.classList.remove("is-kb-target");
-    });
-    const element = this.elementForSlot(best.slot.id);
-    if (element) {
-      element.classList.add("is-kb-target");
-      element.focus({ preventScroll: true });
-    }
   }
 
   private commitSelection(): void {

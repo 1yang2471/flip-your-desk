@@ -89,6 +89,15 @@ fn monitors_of(app: &AppHandle) -> AppResult<Vec<MonitorInfo>> {
             first.primary = true;
         }
     }
+    // 主屏刨掉任务栏：覆盖层只盖工作区，任务栏照常可用。
+    if let Some((wx, wy, ww, wh)) = platform::work_area() {
+        if let Some(primary) = infos.iter_mut().find(|m| m.primary) {
+            primary.x = wx;
+            primary.y = wy;
+            primary.width = ww;
+            primary.height = wh;
+        }
+    }
     Ok(infos)
 }
 
@@ -160,6 +169,7 @@ fn create_overlays(app: &AppHandle, monitors: &[MonitorInfo]) -> AppResult<Vec<u
             .minimizable(false)
             .closable(false)
             .shadow(false)
+            .transparent(true)
             .visible(false)
             .focused(false);
         let window = match builder.build() {
@@ -229,7 +239,6 @@ async fn start_round(
         let captured = platform::capture(&monitors)?;
         Snapshot {
             icons: captured.icons,
-            wallpaper: captured.wallpaper,
             monitors: monitors.clone(),
             fingerprint: captured.fingerprint,
         }

@@ -3,8 +3,7 @@ use std::io::Cursor;
 use std::time::{Duration, Instant};
 
 use base64::Engine;
-use image::codecs::jpeg::JpegEncoder;
-use image::{ImageEncoder, RgbImage, RgbaImage};
+use image::RgbaImage;
 use windows::core::w;
 use windows::Win32::Foundation::{CloseHandle, HANDLE, HWND, LPARAM, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
@@ -22,8 +21,9 @@ use windows::Win32::System::Threading::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     FindWindowExW, FindWindowW, GetSystemMetrics, GetWindowLongW, GetWindowRect,
-    GetWindowThreadProcessId, IsWindowVisible, SendMessageTimeoutW, GWL_STYLE, SMTO_ABORTIFHUNG,
-    SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN,
+    GetWindowThreadProcessId, IsWindowVisible, SendMessageTimeoutW, SystemParametersInfoW,
+    GWL_STYLE, SMTO_ABORTIFHUNG, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN,
+    SM_YVIRTUALSCREEN, SPI_GETWORKAREA, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
 };
 
 use crate::error::{AppError, AppResult};
@@ -658,20 +658,6 @@ fn capture_bounds(desktop: &Desktop) -> AppResult<(HWND, RECT)> {
     ))
 }
 
-fn crop_rgba(source: &RgbaImage, rect: RectI) -> Option<RgbaImage> {
-    if rect.w <= 0 || rect.h <= 0 {
-        return None;
-    }
-    let x = rect.x.max(0) as u32;
-    let y = rect.y.max(0) as u32;
-    let right = (rect.x + rect.w).min(source.width() as i32).max(0) as u32;
-    let bottom = (rect.y + rect.h).min(source.height() as i32).max(0) as u32;
-    if right <= x || bottom <= y {
-        return None;
-    }
-    Some(image::imageops::crop_imm(source, x, y, right - x, bottom - y).to_image())
-}
-
 fn encode_png_data_url(image: &RgbaImage) -> AppResult<String> {
     let mut cursor = Cursor::new(Vec::new());
     image
@@ -681,43 +667,6 @@ fn encode_png_data_url(image: &RgbaImage) -> AppResult<String> {
         "data:image/png;base64,{}",
         base64::engine::general_purpose::STANDARD.encode(cursor.into_inner())
     ))
-}
-
-fn encode_jpeg_data_url(image: &RgbImage) -> AppResult<String> {
-    let mut cursor = Cursor::new(Vec::new());
-    let encoder = JpegEncoder::new_with_quality(&mut cursor, 82);
-    encoder
-        .write_image(
-            image.as_raw(),
-            image.width(),
-            image.height(),
-            image::ExtendedColorType::Rgb8,
-        )
-        .map_err(|err| AppError::with_detail("encode_wallpaper", err.to_string()))?;
-    Ok(format!(
-        "data:image/jpeg;base64,{}",
-        base64::engine::general_purpose::STANDARD.encode(cursor.into_inner())
-    ))
-}
-
-fn wallpaper_for_monitor(clean: &RgbaImage, origin: RECT, monitor: &MonitorInfo) -> Option<String> {
-    let rect = RectI {
-        x: monitor.x - origin.left,
-        y: monitor.y - origin.top,
-        w: monitor.width as i32,
-        h: monitor.height as i32,
-    };
-    let cropped = crop_rgba(clean, rect)?;
-    if cropped.width() as i32 != monitor.width as i32
-        || cropped.height() as i32 != monitor.height as i32
-    {
-        return None;
-    }
-    let rgb = RgbImage::from_fn(cropped.width(), cropped.height(), |x, y| {
-        let p = cropped.get_pixel(x, y);
-        image::Rgb([p[0], p[1], p[2]])
-    });
-    encode_jpeg_data_url(&rgb).ok()
 }
 
 fn tone_for_cell(clean: &RgbaImage, origin: RECT, cell: RectI) -> Tone {
@@ -907,6 +856,29 @@ pub fn probe() -> ProbeData {
     }
 }
 
+/// 主显示器工作区（刨掉任务栏后的矩形）。
+pub fn work_area() -> Option<(i32, i32, u32, u32)> {
+    let mut rect = RECT::default();
+    let ok = unsafe {
+        SystemParametersInfoW(
+            SPI_GETWORKAREA,
+            0,
+            Some(&mut rect as *mut RECT as *mut core::ffi::c_void),
+            SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
+        )
+    }
+    .is_ok();
+    if !ok {
+        return None;
+    }
+    Some((
+        rect.left,
+        rect.top,
+        (rect.right - rect.left) as u32,
+        (rect.bottom - rect.top) as u32,
+    ))
+}
+
 pub fn fingerprint() -> AppResult<String> {
     let desktop = Desktop::open()?;
     desktop.fingerprint()
@@ -935,11 +907,6 @@ pub fn capture(monitors: &[MonitorInfo]) -> AppResult<Captured> {
     let (clean, _) = clean_result?;
     restore_result?;
 
-    let wallpaper = monitors
-        .iter()
-        .map(|monitor| wallpaper_for_monitor(&clean, origin, monitor))
-        .collect::<Vec<_>>();
-
     let icons = items
         .iter()
         .map(|item| {
@@ -963,11 +930,7 @@ pub fn capture(monitors: &[MonitorInfo]) -> AppResult<Captured> {
         .collect::<Vec<_>>();
 
     let fingerprint = fingerprint_of(&items);
-    Ok(Captured {
-        icons,
-        wallpaper,
-        fingerprint,
-    })
+    Ok(Captured { icons, fingerprint })
 }
 
 pub fn apply_positions(positions: &LayoutPositions) -> AppResult<()> {
@@ -986,7 +949,25 @@ pub fn apply_positions(positions: &LayoutPositions) -> AppResult<()> {
                 format!("item {index} no longer exists"),
             ));
         }
-        desktop.set_item_position(*index as usize, *x, *y)?;
+        // explorer 瞬时忙碌会让单条 LVM 写入被拒：重试几次再放弃。
+        let mut last_err = None;
+        for attempt in 0..3 {
+            match desktop.set_item_position(*index as usize, *x, *y) {
+                Ok(()) => {
+                    last_err = None;
+                    break;
+                }
+                Err(err) => {
+                    last_err = Some(err);
+                    if attempt < 2 {
+                        std::thread::sleep(Duration::from_millis(120));
+                    }
+                }
+            }
+        }
+        if let Some(err) = last_err {
+            return Err(err);
+        }
     }
     std::thread::sleep(Duration::from_millis(160));
     Ok(())

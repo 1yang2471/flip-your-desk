@@ -29,3 +29,7 @@ pub fn apply_positions(_positions: &LayoutPositions) -> AppResult<()> {
 pub fn verify_positions(_positions: &LayoutPositions) -> AppResult<()> {
     Err(AppError::new("unsupported_platform"))
 }
+
+pub fn work_area() -> Option<(i32, i32, u32, u32)> {
+    None
+}

@@ -61,7 +61,7 @@ export const enUS = {
   "overlay.moves.other": "{n} moves",
   "overlay.cardBackAria": "Face-down card",
   "overlay.cardFaceAria": "Icon: {name}. Press Enter to pick it up",
-  "overlay.selected": "Picked up. Use the arrow keys to choose a slot, Enter to drop, Esc to cancel",
+  "overlay.selected": "Picked up. Click another card or an empty slot to place it, Esc to cancel",
   "overlay.cancelSelection": "Cancel selection",
   "overlay.dragHint": "Drag it where you remember",
   "overlay.waiting": "Preparing…",
