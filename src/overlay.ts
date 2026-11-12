@@ -199,6 +199,8 @@ export class OverlayGame {
       void api
         .finishRound()
         .then(() => {
+          this.pending = false;
+          this.confirmButton.disabled = false;
           this.sounds.finish();
         })
         .catch((error) => {
@@ -279,6 +281,8 @@ export class OverlayGame {
   // ---------------------------------------------------------------- state
 
   private applyState(state: PublicState, initial: boolean): void {
+    if (state.finished) this.pending = false;
+    if (!state.finished && this.resultOpen) this.pending = false;
     const previousFinished = this.state.finished;
     this.state = state;
     this.sounds.setMuted(state.muted);
@@ -712,6 +716,7 @@ export class OverlayGame {
   // --------------------------------------------------------------- modals
 
   private showResult(result: RoundResult): void {
+    this.pending = false;
     this.resultOpen = true;
     clear(this.resultLayer);
     const panel = h("div", "modal");
@@ -770,46 +775,57 @@ export class OverlayGame {
     });
     actions.appendChild(replay);
 
-    const save = h("button", "secondary-button");
-    save.type = "button";
-    save.appendChild(h("span", "", t(this.lang, "result.save")));
-    save.addEventListener("click", () => {
-      if (this.pending) return;
-      this.pending = true;
-      this.showBusy(panel, t(this.lang, "result.applying"));
-      void api
-        .saveAndExit()
-        .catch((error) => {
-          this.pending = false;
-          const payload = asAppError(error);
-          console.error("save failed", payload);
-          this.showBusy(panel, errorText(this.lang, payload.code), true);
-        });
-    });
-    actions.appendChild(save);
+    if (this.view.mock) {
+      const quit = h("button", "secondary-button");
+      quit.type = "button";
+      quit.appendChild(h("span", "", t(this.lang, "result.quitDemo")));
+      quit.addEventListener("click", () => {
+        if (this.pending) return;
+        this.pending = true;
+        void api.quitApp();
+      });
+      actions.appendChild(quit);
+      panel.appendChild(actions);
+      panel.appendChild(h("p", "modal-note", t(this.lang, "result.demoNote")));
+    } else {
+      const save = h("button", "secondary-button");
+      save.type = "button";
+      save.appendChild(h("span", "", t(this.lang, "result.save")));
+      save.addEventListener("click", () => {
+        if (this.pending) return;
+        this.pending = true;
+        this.showBusy(panel, t(this.lang, "result.applying"));
+        void api
+          .saveAndExit()
+          .catch((error) => {
+            this.pending = false;
+            const payload = asAppError(error);
+            console.error("save failed", payload);
+            this.showBusy(panel, errorText(this.lang, payload.code), true);
+          });
+      });
+      actions.appendChild(save);
 
-    const restore = h("button", "text-button");
-    restore.type = "button";
-    restore.appendChild(h("span", "", t(this.lang, "result.restore")));
-    restore.addEventListener("click", () => {
-      if (this.pending) return;
-      this.pending = true;
-      this.showBusy(panel, t(this.lang, "result.restoring"));
-      void api
-        .restoreAndExit()
-        .catch((error) => {
-          this.pending = false;
-          const payload = asAppError(error);
-          console.error("restore failed", payload);
-          this.showBusy(panel, errorText(this.lang, payload.code), true);
-        });
-    });
-    actions.appendChild(restore);
-    panel.appendChild(actions);
-
-    panel.appendChild(
-      h("p", "modal-note", t(this.lang, "result.saveNote")),
-    );
+      const restore = h("button", "text-button");
+      restore.type = "button";
+      restore.appendChild(h("span", "", t(this.lang, "result.restore")));
+      restore.addEventListener("click", () => {
+        if (this.pending) return;
+        this.pending = true;
+        this.showBusy(panel, t(this.lang, "result.restoring"));
+        void api
+          .restoreAndExit()
+          .catch((error) => {
+            this.pending = false;
+            const payload = asAppError(error);
+            console.error("restore failed", payload);
+            this.showBusy(panel, errorText(this.lang, payload.code), true);
+          });
+      });
+      actions.appendChild(restore);
+      panel.appendChild(actions);
+      panel.appendChild(h("p", "modal-note", t(this.lang, "result.saveNote")));
+    }
 
     this.resultLayer.appendChild(panel);
     this.resultLayer.hidden = false;
@@ -901,7 +917,12 @@ export class OverlayGame {
     const slots = this.view.slots;
     this.placeElement(this.hudWrap, slots, "hud");
     if (!this.confirmButton.hidden) {
-      this.placeElement(this.confirmButton, slots, "confirm");
+      this.placeElement(
+        this.confirmButton,
+        slots,
+        "confirm",
+        this.hudWrap.getBoundingClientRect(),
+      );
     }
   }
 
@@ -909,6 +930,7 @@ export class OverlayGame {
     element: HTMLElement,
     slots: SlotView[],
     kind: "hud" | "confirm",
+    avoid?: DOMRect,
   ): void {
     const rect = element.getBoundingClientRect();
     const width = rect.width || 320;
@@ -946,6 +968,19 @@ export class OverlayGame {
           Math.min(candidate.y + height, slot.y + slot.h) - Math.max(candidate.y, slot.y),
         );
         overlap += overlapX * overlapY;
+      }
+      if (avoid) {
+        const overlapX = Math.max(
+          0,
+          Math.min(candidate.x + width, avoid.left + avoid.width) -
+            Math.max(candidate.x, avoid.left),
+        );
+        const overlapY = Math.max(
+          0,
+          Math.min(candidate.y + height, avoid.top + avoid.height) -
+            Math.max(candidate.y, avoid.top),
+        );
+        overlap += overlapX * overlapY * 8;
       }
       if (overlap < bestOverlap) {
         bestOverlap = overlap;

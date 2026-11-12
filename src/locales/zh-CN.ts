@@ -81,6 +81,8 @@ export const zhCN = {
   "result.retry": "重试",
   "result.quit": "退出",
   "result.saveNote": "保存后桌面图标会移动到本局的位置。",
+  "result.demoNote": "演示模式不会读写真实桌面。",
+  "result.quitDemo": "退出演示",
 
   "exit.title": "结束本局？",
   "exit.body": "退出后桌面保持原样，本局进度不会保存。",

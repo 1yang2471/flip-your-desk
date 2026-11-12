@@ -83,6 +83,8 @@ export const enUS = {
   "result.retry": "Try again",
   "result.quit": "Quit",
   "result.saveNote": "Saving moves your desktop icons to this round's layout.",
+  "result.demoNote": "Demo mode never reads or writes your real desktop.",
+  "result.quitDemo": "Quit demo",
 
   "exit.title": "End this round?",
   "exit.body": "Your desktop stays as it is. This round will not be saved.",

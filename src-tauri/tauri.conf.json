@@ -15,7 +15,7 @@
         "label": "launcher",
         "title": "Flip Your Desk",
         "width": 540,
-        "height": 660,
+        "height": 540,
         "resizable": false,
         "maximizable": false,
         "minimizable": true,

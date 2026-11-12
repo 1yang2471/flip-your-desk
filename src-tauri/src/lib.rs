@@ -138,19 +138,22 @@ fn probe_environment(app: AppHandle, state: State<'_, AppState>) -> AppResult<En
 fn close_overlays(app: &AppHandle, count: usize) {
     for index in 0..count {
         if let Some(window) = app.get_webview_window(&format!("overlay-{index}")) {
-            let _ = window.close();
+            let _ = window.destroy();
         }
     }
 }
 
 fn create_overlays(app: &AppHandle, monitors: &[MonitorInfo]) -> AppResult<Vec<usize>> {
+    // 仅调试：在普通窗口里跑完整流程，避免全屏应用/游戏抢占桌面。
+    let test_window =
+        cfg!(debug_assertions) && std::env::var_os("FLIP_YOUR_DESK_TEST_WINDOW").is_some();
     let mut created = Vec::new();
     for monitor in monitors {
         let label = format!("overlay-{}", monitor.index);
         let builder = WebviewWindowBuilder::new(app, &label, WebviewUrl::App("index.html".into()))
             .title("Flip Your Desk")
             .decorations(false)
-            .always_on_top(true)
+            .always_on_top(!test_window)
             .skip_taskbar(true)
             .resizable(false)
             .maximizable(false)
@@ -169,7 +172,20 @@ fn create_overlays(app: &AppHandle, monitors: &[MonitorInfo]) -> AppResult<Vec<u
                 ));
             }
         };
-        if let Err(err) = window.set_position(tauri::PhysicalPosition::new(monitor.x, monitor.y)) {
+        let (x, y, width, height) = if test_window {
+            // 仅调试：固定 900×700 的普通窗口，便于 CDP 自动化与截图。
+            const WIDTH: u32 = 900;
+            const HEIGHT: u32 = 700;
+            (
+                monitor.x + (monitor.width.saturating_sub(WIDTH) / 2) as i32,
+                monitor.y + (monitor.height.saturating_sub(HEIGHT) / 2) as i32,
+                WIDTH,
+                HEIGHT,
+            )
+        } else {
+            (monitor.x, monitor.y, monitor.width, monitor.height)
+        };
+        if let Err(err) = window.set_position(tauri::PhysicalPosition::new(x, y)) {
             let _ = window.close();
             close_overlays(app, created.len());
             return Err(AppError::with_detail(
@@ -177,7 +193,7 @@ fn create_overlays(app: &AppHandle, monitors: &[MonitorInfo]) -> AppResult<Vec<u
                 err.to_string(),
             ));
         }
-        if let Err(err) = window.set_size(tauri::PhysicalSize::new(monitor.width, monitor.height)) {
+        if let Err(err) = window.set_size(tauri::PhysicalSize::new(width, height)) {
             let _ = window.close();
             close_overlays(app, created.len());
             return Err(AppError::with_detail(
@@ -436,7 +452,7 @@ fn write_backup(app: &AppHandle, backup: &LayoutBackup) -> AppResult<std::path::
 
 #[tauri::command]
 async fn save_and_exit(app: AppHandle, state: State<'_, AppState>) -> AppResult<()> {
-    let (positions, original, backup, fingerprint, total) = {
+    let (positions, original, backup, fingerprint, total, mock) = {
         let inner = lock_state(&state);
         let round = inner
             .round
@@ -448,8 +464,14 @@ async fn save_and_exit(app: AppHandle, state: State<'_, AppState>) -> AppResult<
             LayoutBackup::from_round(round),
             round.snapshot.fingerprint.clone(),
             round.total(),
+            round.mock,
         )
     };
+    if mock {
+        // 演示模式没有真实桌面快照，绝不允许走到写回路径。
+        app.exit(0);
+        return Ok(());
+    }
     if positions.len() != total {
         return Err(AppError::new("not_all_placed"));
     }
@@ -477,7 +499,7 @@ async fn save_and_exit(app: AppHandle, state: State<'_, AppState>) -> AppResult<
 
 #[tauri::command]
 async fn restore_and_exit(app: AppHandle, state: State<'_, AppState>) -> AppResult<()> {
-    let (original, fingerprint) = {
+    let (original, fingerprint, mock) = {
         let inner = lock_state(&state);
         let round = inner
             .round
@@ -486,8 +508,13 @@ async fn restore_and_exit(app: AppHandle, state: State<'_, AppState>) -> AppResu
         (
             round.original_positions(),
             round.snapshot.fingerprint.clone(),
+            round.mock,
         )
     };
+    if mock {
+        app.exit(0);
+        return Ok(());
+    }
     let current = platform::fingerprint()?;
     if current != fingerprint {
         return Err(AppError::new("desktop_changed"));
@@ -515,6 +542,16 @@ fn minimize_launcher(app: AppHandle) -> AppResult<()> {
 
 pub fn run() {
     tauri::Builder::default()
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if window.label().starts_with("overlay-") {
+                    // 外部（例如全屏游戏）强制关闭覆盖窗：先挡住，再安全退出，
+                    // 避免留下隐藏的启动窗和不可用状态。
+                    api.prevent_close();
+                    window.app_handle().exit(0);
+                }
+            }
+        })
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
             probe_environment,
