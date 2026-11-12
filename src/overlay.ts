@@ -229,6 +229,8 @@ export class OverlayGame {
       this.applyHover(event.payload.slot);
     });
     document.addEventListener("keydown", (event) => this.onKeyDown(event));
+    // 计时器只在状态事件里刷新会冻结：加 1 秒心跳。
+    window.setInterval(() => this.updateClock(), 1000);
   }
 
   private onKeyDown(event: KeyboardEvent): void {

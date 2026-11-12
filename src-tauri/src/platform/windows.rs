@@ -379,19 +379,42 @@ impl Desktop {
                 "ScreenToClient failed",
             ));
         }
+        // 这台系统的桌面 listview 对两种写消息都可能返回 0（即便写入已生效），
+        // 不能信任返回值：两种变体都发一遍，随后以读回位置校验为准。
+        let packed = ((point.y as u16 as u32) << 16) | (point.x as u16 as u32);
+        let _ = self.send(listview_msg(0x100F, index, packed as isize))?;
+        let _ = self.raw_set_item_position(index, point.x, point.y)?;
+        let current = self.item_position(index)?;
+        if (current.x - screen_x).abs() <= 2 && (current.y - screen_y).abs() <= 2 {
+            Ok(())
+        } else {
+            Err(AppError::with_detail(
+                "desktop_write",
+                format!(
+                    "item {index} did not land at ({screen_x},{screen_y}), read back ({},{})",
+                    current.x, current.y
+                ),
+            ))
+        }
+    }
+
+    /// 直接以 listview 客户端坐标发送写入，返回 LRESULT 便于诊断。
+    fn raw_set_item_position(
+        &self,
+        index: usize,
+        client_x: i32,
+        client_y: i32,
+    ) -> AppResult<isize> {
+        let point = POINT {
+            x: client_x,
+            y: client_y,
+        };
         self.remote.write(0, &point)?;
-        let result = self.send(listview_msg(
+        self.send(listview_msg(
             LVM_SETITEMPOSITION32,
             index,
             self.remote.ptr_at(0) as isize,
-        ))?;
-        if result == 0 {
-            return Err(AppError::with_detail(
-                "desktop_write",
-                format!("LVM_SETITEMPOSITION32 rejected item {index}"),
-            ));
-        }
-        Ok(())
+        ))
     }
 
     fn fingerprint(&self) -> AppResult<String> {
@@ -942,6 +965,7 @@ pub fn apply_positions(positions: &LayoutPositions) -> AppResult<()> {
         return Err(AppError::new("auto_arrange_on"));
     }
     let count = desktop.count()?;
+    let mut failures: Vec<u32> = Vec::new();
     for (index, x, y) in positions {
         if (*index as usize) >= count {
             return Err(AppError::with_detail(
@@ -951,10 +975,11 @@ pub fn apply_positions(positions: &LayoutPositions) -> AppResult<()> {
         }
         // explorer 瞬时忙碌会让单条 LVM 写入被拒：重试几次再放弃。
         let mut last_err = None;
+        let mut ok = false;
         for attempt in 0..3 {
             match desktop.set_item_position(*index as usize, *x, *y) {
                 Ok(()) => {
-                    last_err = None;
+                    ok = true;
                     break;
                 }
                 Err(err) => {
@@ -965,9 +990,16 @@ pub fn apply_positions(positions: &LayoutPositions) -> AppResult<()> {
                 }
             }
         }
-        if let Some(err) = last_err {
-            return Err(err);
+        if !ok {
+            failures.push(*index);
         }
+        let _ = last_err;
+    }
+    if !failures.is_empty() {
+        return Err(AppError::with_detail(
+            "desktop_write",
+            format!("LVM_SETITEMPOSITION32 rejected items {failures:?}"),
+        ));
     }
     std::thread::sleep(Duration::from_millis(160));
     Ok(())
