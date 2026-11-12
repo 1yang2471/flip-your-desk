@@ -792,6 +792,11 @@ button {
   background: #eec06c;
 }
 
+/* 作者样式会覆盖 UA 的 [hidden]：显式补回，否则隐藏的弹窗层仍铺满全屏拦截点击 */
+[hidden] {
+  display: none !important;
+}
+
 .modal-layer {
   position: absolute;
   inset: 0;
