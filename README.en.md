@@ -1,0 +1,85 @@
+# Flip Your Desk
+
+Flip every desktop icon face down, draw the real icons back at random, and put each one where you remember it.
+
+[中文](README.md) · License: MIT
+
+## What it does
+
+- Remembers where every desktop icon sits, then turns each position into a face-down `?` card
+- Click any empty slot to draw an icon at random; the card flips to the real icon and its label
+- Drag icons to swap them, or drop one on an untouched slot to move it
+- When every card is drawn, hit Confirm to see your accuracy, time and move count — **numbers only, no hints about which ones were wrong**
+- Save the new arrangement (your desktop icons actually move) or restore the original in one click
+
+## Screenshots
+
+<!-- Screenshots will be added after the first release -->
+
+## Install
+
+Grab a build from [Releases](https://github.com/1yang2471/flip-your-desk/releases):
+
+- `Flip Your Desk_0.1.0_x64-setup.exe`: NSIS installer for the current user
+- `Flip Your Desk_0.1.0_x64-setup.msi`: MSI package, when available
+
+You can also run the portable `flip-your-desk.exe` directly (requires the Microsoft Edge WebView2 runtime, which ships with Windows 11).
+
+## How to play
+
+1. Open the app and check that the environment panel says Ready
+2. Hit Start; the desktop is covered and every icon becomes a `?`
+3. Click a slot to draw an icon, drag icons to where you remember them
+4. Once every card is drawn, hit Confirm
+5. Pick Play again, Save new layout or Restore original
+
+### Two prerequisites
+
+- **Auto arrange icons must be off**: right-click the desktop → View → clear Auto arrange icons. While it is on, Explorer ignores any position we write.
+- **Desktop icons must be visible**: right-click the desktop → View → tick Show desktop icons.
+
+The app detects both states and tells you how to fix them; it never changes your system settings for you.
+
+## Keyboard
+
+| Action | Key |
+| --- | --- |
+| Draw a card | Tab to a slot, then Enter or Space |
+| Pick up an icon | Tab to an icon, then Enter |
+| Choose a slot | Arrow keys |
+| Drop the icon | Enter |
+| Cancel the selection | Esc |
+| End the round | Esc (asks first) |
+
+## Privacy
+
+Fully offline: no network calls, no telemetry, no writes outside its own app data folder. Before saving a layout it leaves an `original-layout.json` backup so you can restore by hand.
+
+## How it works
+
+- Icon positions and labels are read from Explorer's desktop ListView (`LVM_GETITEMPOSITION` / `LVM_GETITEMTEXTW`); positions are written back with `LVM_SETITEMPOSITION32`
+- Card faces are cropped from the real desktop pixels (`PrintWindow` on the desktop view; the icons are hidden briefly to capture a clean wallpaper, then restored), so thumbnails and shortcut arrows stay authentic
+- Every card back switches between light and dark based on the wallpaper brightness behind it
+- Before writing, the app checks that the desktop has not changed (count, names, coordinates) and refuses to write if it has; after writing it reads the positions back and rolls back from the backup if anything is off
+
+## Build from source
+
+You need Node.js 20+, stable Rust, the Microsoft C++ Build Tools (with the Windows SDK) and the WebView2 runtime.
+
+```bash
+npm install
+npm run tauri dev      # development run
+npm run tauri build    # installers land in src-tauri/target/release/bundle
+```
+
+Type-check the frontend with `npm run check`; run the backend unit tests with `cargo test --manifest-path src-tauri/Cargo.toml`.
+
+## Known limitations
+
+- Windows 10/11 only for now (macOS and Linux are planned; the code is already split into platform adapters)
+- Multiple displays must be in extended mode; mixed-DPI multi-monitor setups are not verified yet
+- With hundreds of desktop icons the board gets dense; there is no batching yet
+
+## License
+
+[MIT](LICENSE)

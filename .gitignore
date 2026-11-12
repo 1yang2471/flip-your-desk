@@ -1,0 +1,21 @@
+# 依赖
+node_modules/
+dist/
+.cargo/
+
+# Rust / Tauri
+src-tauri/target/
+src-tauri/gen/
+
+# 本地开发产物
+*.log
+.vite/
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+Thumbs.db
+
+# 应用运行期数据（不应进仓库）
+*.bak
+backup-*.json

@@ -1,0 +1,331 @@
+import { listen } from "@tauri-apps/api/event";
+
+import { api, asAppError } from "./api";
+import { clear, h, iconEl } from "./dom";
+import {
+  APP_VERSION,
+  detectLang,
+  displaySummary,
+  errorText,
+  pluralKey,
+  storeLang,
+  t,
+  type Lang,
+} from "./i18n";
+import type { EnvReport } from "./types";
+
+interface LauncherState {
+  lang: Lang;
+  env: EnvReport | null;
+  probing: boolean;
+  starting: boolean;
+  error: string | null;
+  muted: boolean;
+}
+
+interface LauncherActions {
+  recheck: () => void;
+  start: (mode: "real" | "mock") => void;
+  toggleLang: () => void;
+  toggleMute: () => void;
+  minimize: () => void;
+  close: () => void;
+}
+
+export async function initLauncher(root: HTMLElement): Promise<void> {
+  const state: LauncherState = {
+    lang: detectLang(),
+    env: null,
+    probing: true,
+    starting: false,
+    error: null,
+    muted: false,
+  };
+
+  const actions: LauncherActions = {
+    recheck: () => void probe(),
+    start: (mode) => void start(mode),
+    toggleLang: () => {
+      const next: Lang = state.lang === "zh-CN" ? "en-US" : "zh-CN";
+      state.lang = next;
+      storeLang(next);
+      render();
+    },
+    toggleMute: () => {
+      state.muted = !state.muted;
+      void api.setMuted(state.muted).catch((error) => {
+        console.error("mute failed", asAppError(error));
+        state.muted = !state.muted;
+      });
+      render();
+    },
+    minimize: () => {
+      void api.minimizeLauncher().catch((error) => {
+        console.error("minimize failed", asAppError(error));
+      });
+    },
+    close: () => {
+      void api.quitApp();
+    },
+  };
+
+  const render = () => renderLauncher(root, state, actions);
+
+  const probe = async () => {
+    state.probing = true;
+    state.error = null;
+    render();
+    try {
+      const env = await api.probeEnvironment();
+      state.env = env;
+      state.muted = env.muted;
+    } catch (error) {
+      const payload = asAppError(error);
+      console.error("probe failed", payload);
+      state.error = errorText(state.lang, payload.code);
+    }
+    state.probing = false;
+    render();
+  };
+
+  const start = async (mode: "real" | "mock") => {
+    state.starting = true;
+    state.error = null;
+    render();
+    try {
+      await api.startRound(state.lang, mode);
+    } catch (error) {
+      const payload = asAppError(error);
+      console.error("start failed", payload);
+      state.error = errorText(state.lang, payload.code);
+      state.starting = false;
+      render();
+    }
+  };
+
+  render();
+  await probe();
+  void listen<{ code: string }>("start-failed", (event) => {
+    state.starting = false;
+    state.error = errorText(state.lang, event.payload.code);
+    render();
+  });
+}
+
+function renderLauncher(
+  root: HTMLElement,
+  state: LauncherState,
+  actions: LauncherActions,
+): void {
+  const { lang, env } = state;
+  clear(root);
+  root.classList.add("launcher-root");
+
+  const dragStrip = h("div", "window-drag");
+  dragStrip.setAttribute("data-tauri-drag-region", "");
+  root.appendChild(dragStrip);
+
+  const shell = h("div", "launcher-shell");
+
+  // Header ---------------------------------------------------------------
+  const head = h("header", "launcher-head");
+  const brand = h("div", "brand");
+  const mark = h("span", "brand-mark");
+  mark.appendChild(h("span", "brand-mark-glyph", "?"));
+  brand.appendChild(mark);
+  const brandText = h("div", "brand-text");
+  brandText.appendChild(h("strong", "brand-name", t(lang, "app.name")));
+  brandText.appendChild(h("span", "brand-tagline", t(lang, "app.tagline")));
+  brand.appendChild(brandText);
+  head.appendChild(brand);
+
+  const actionsRow = h("div", "head-actions");
+  const langButton = h("button", "icon-button lang-button");
+  langButton.type = "button";
+  langButton.textContent = lang === "zh-CN" ? "EN" : "中文";
+  langButton.title = t(lang, "launcher.language");
+  langButton.setAttribute("aria-label", t(lang, "launcher.language"));
+  langButton.addEventListener("click", actions.toggleLang);
+  actionsRow.appendChild(langButton);
+
+  const muteButton = h("button", "icon-button");
+  muteButton.type = "button";
+  muteButton.title = t(lang, state.muted ? "launcher.unmute" : "launcher.mute");
+  muteButton.setAttribute(
+    "aria-label",
+    t(lang, state.muted ? "launcher.unmute" : "launcher.mute"),
+  );
+  muteButton.setAttribute("aria-pressed", String(state.muted));
+  muteButton.appendChild(iconEl(state.muted ? "mute" : "volume"));
+  muteButton.addEventListener("click", actions.toggleMute);
+  actionsRow.appendChild(muteButton);
+
+  const minimizeButton = h("button", "icon-button");
+  minimizeButton.type = "button";
+  minimizeButton.title = t(lang, "launcher.minimize");
+  minimizeButton.setAttribute("aria-label", t(lang, "launcher.minimize"));
+  minimizeButton.appendChild(iconEl("minus"));
+  minimizeButton.addEventListener("click", actions.minimize);
+  actionsRow.appendChild(minimizeButton);
+
+  const closeButton = h("button", "icon-button");
+  closeButton.type = "button";
+  closeButton.title = t(lang, "launcher.close");
+  closeButton.setAttribute("aria-label", t(lang, "launcher.close"));
+  closeButton.appendChild(iconEl("close"));
+  closeButton.addEventListener("click", actions.close);
+  actionsRow.appendChild(closeButton);
+
+  head.appendChild(actionsRow);
+  shell.appendChild(head);
+
+  // Environment ----------------------------------------------------------
+  const panel = h("section", "status-panel");
+  const panelHead = h("div", "panel-head");
+  panelHead.appendChild(h("span", "panel-title", t(lang, "launcher.env")));
+  const ready = !!env && env.issues.length === 0;
+  const statusPill = h("span", `status-pill ${ready ? "is-ready" : "is-warn"}`);
+  statusPill.appendChild(iconEl(ready ? "check" : "alert", 13));
+  statusPill.appendChild(
+    h("span", "", t(lang, ready ? "launcher.ready" : "launcher.needsAttention")),
+  );
+  panelHead.appendChild(statusPill);
+
+  const recheck = h("button", "text-button");
+  recheck.type = "button";
+  recheck.appendChild(iconEl("refresh", 13));
+  recheck.appendChild(
+    h("span", "", t(lang, state.probing ? "launcher.rechecking" : "launcher.recheck")),
+  );
+  recheck.disabled = state.probing || state.starting;
+  recheck.addEventListener("click", actions.recheck);
+  panelHead.appendChild(recheck);
+  panel.appendChild(panelHead);
+
+  const rows = h("ul", "status-list");
+  const addRow = (
+    label: string,
+    value: string,
+    tone: "ok" | "warn" | "bad" | "idle",
+  ) => {
+    const item = h("li", "status-row");
+    item.appendChild(h("span", "status-label", label));
+    const valueWrap = h("span", "status-value");
+    const dot = h("span", `status-dot is-${tone}`);
+    dot.setAttribute("aria-hidden", "true");
+    valueWrap.appendChild(dot);
+    valueWrap.appendChild(h("span", "", value));
+    item.appendChild(valueWrap);
+    rows.appendChild(item);
+  };
+
+  if (!env || state.probing) {
+    addRow(t(lang, "launcher.status.icons"), "…", "idle");
+    addRow(t(lang, "launcher.status.displays"), "…", "idle");
+    addRow(t(lang, "launcher.status.auto"), "…", "idle");
+    addRow(t(lang, "launcher.status.visibility"), "…", "idle");
+  } else {
+    addRow(
+      t(lang, "launcher.status.icons"),
+      t(lang, pluralKey("launcher.value.icons", env.iconCount), { n: env.iconCount }),
+      env.iconCount >= 2 ? "ok" : "bad",
+    );
+    addRow(
+      t(lang, "launcher.status.displays"),
+      displaySummary(lang, env.monitors),
+      env.monitors.length > 0 ? "ok" : "bad",
+    );
+    addRow(
+      t(lang, "launcher.status.auto"),
+      t(lang, env.autoArrange ? "launcher.value.autoOn" : "launcher.value.autoOff"),
+      env.autoArrange ? "warn" : "ok",
+    );
+    addRow(
+      t(lang, "launcher.status.visibility"),
+      t(lang, env.iconsVisible ? "launcher.value.visible" : "launcher.value.hidden"),
+      env.iconsVisible ? "ok" : "bad",
+    );
+  }
+  panel.appendChild(rows);
+
+  if (env && env.issues.length > 0) {
+    const issues = h("div", "issue-list");
+    issues.appendChild(h("p", "issue-title", t(lang, "launcher.issueTitle")));
+    for (const code of env.issues) {
+      const issue = h("div", "issue");
+      issue.appendChild(iconEl("alert", 14));
+      const text = h("div", "issue-text");
+      text.appendChild(h("p", "issue-name", t(lang, `issue.${code}.title`)));
+      text.appendChild(h("p", "issue-hint", t(lang, `issue.${code}.hint`)));
+      issue.appendChild(text);
+      issues.appendChild(issue);
+    }
+    panel.appendChild(issues);
+  }
+
+  if (state.error) {
+    const error = h("div", "inline-error");
+    error.appendChild(iconEl("alert", 14));
+    error.appendChild(h("span", "", state.error));
+    panel.appendChild(error);
+  }
+
+  shell.appendChild(panel);
+
+  // How to play ----------------------------------------------------------
+  const howto = h("section", "howto");
+  howto.appendChild(h("p", "howto-title", t(lang, "launcher.howtoTitle")));
+  const steps = h("ol", "howto-steps");
+  const stepText = [
+    t(lang, "launcher.howto.1"),
+    t(lang, "launcher.howto.2"),
+    t(lang, "launcher.howto.3"),
+  ];
+  stepText.forEach((text, index) => {
+    const step = h("li", "howto-step");
+    step.appendChild(h("span", "howto-index", `0${index + 1}`));
+    step.appendChild(h("span", "howto-text", text));
+    steps.appendChild(step);
+  });
+  howto.appendChild(steps);
+  shell.appendChild(howto);
+
+  // Actions --------------------------------------------------------------
+  const startButton = h("button", "primary-button");
+  startButton.type = "button";
+  const blocked = !env || env.issues.length > 0 || state.probing;
+  startButton.disabled = blocked || state.starting;
+  if (state.starting) {
+    const spinner = h("span", "spinner");
+    spinner.setAttribute("aria-hidden", "true");
+    startButton.appendChild(spinner);
+    startButton.appendChild(h("span", "", t(lang, "launcher.starting")));
+  } else {
+    startButton.appendChild(h("span", "", t(lang, "launcher.start")));
+  }
+  startButton.addEventListener("click", () => actions.start("real"));
+  shell.appendChild(startButton);
+
+  if (blocked && env && env.issues.length > 0) {
+    shell.appendChild(h("p", "start-hint", t(lang, "launcher.startDisabled")));
+  }
+
+  if (import.meta.env.DEV) {
+    const demo = h("button", "text-button demo-button");
+    demo.type = "button";
+    demo.appendChild(iconEl("play", 13));
+    demo.appendChild(h("span", "", t(lang, "launcher.demo")));
+    demo.disabled = state.starting;
+    demo.addEventListener("click", () => actions.start("mock"));
+    shell.appendChild(demo);
+  }
+
+  // Footer ---------------------------------------------------------------
+  const footer = h("footer", "launcher-footer");
+  footer.appendChild(
+    h("span", "", t(lang, "launcher.footer", { version: APP_VERSION })),
+  );
+  shell.appendChild(footer);
+
+  root.appendChild(shell);
+}
