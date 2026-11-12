@@ -15,6 +15,7 @@ src-tauri/gen/
 .idea/
 .DS_Store
 Thumbs.db
+.mimosa/
 
 # 应用运行期数据（不应进仓库）
 *.bak
