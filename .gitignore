@@ -16,6 +16,7 @@ src-tauri/gen/
 .DS_Store
 Thumbs.db
 .mimosa/
+.video_agent/
 
 # 应用运行期数据（不应进仓库）
 *.bak
