@@ -121,15 +121,12 @@ function renderLauncher(
   clear(root);
   root.classList.add("launcher-root");
 
-  const dragStrip = h("div", "window-drag");
-  dragStrip.setAttribute("data-tauri-drag-region", "");
-  root.appendChild(dragStrip);
-
   const shell = h("div", "launcher-shell");
 
   // Header ---------------------------------------------------------------
   const head = h("header", "launcher-head");
   const brand = h("div", "brand");
+  brand.setAttribute("data-tauri-drag-region", "");
   const mark = h("span", "brand-mark");
   mark.appendChild(h("span", "brand-mark-glyph", "?"));
   brand.appendChild(mark);
@@ -138,6 +135,10 @@ function renderLauncher(
   brandText.appendChild(h("span", "brand-tagline", t(lang, "app.tagline")));
   brand.appendChild(brandText);
   head.appendChild(brand);
+
+  const spacer = h("div", "head-spacer");
+  spacer.setAttribute("data-tauri-drag-region", "");
+  head.appendChild(spacer);
 
   const actionsRow = h("div", "head-actions");
   const langButton = h("button", "icon-button lang-button");
@@ -179,15 +180,28 @@ function renderLauncher(
   head.appendChild(actionsRow);
   shell.appendChild(head);
 
+  const body = h("div", "launcher-body");
+
   // Environment ----------------------------------------------------------
   const panel = h("section", "status-panel");
   const panelHead = h("div", "panel-head");
   panelHead.appendChild(h("span", "panel-title", t(lang, "launcher.env")));
   const ready = !!env && env.issues.length === 0;
-  const statusPill = h("span", `status-pill ${ready ? "is-ready" : "is-warn"}`);
-  statusPill.appendChild(iconEl(ready ? "check" : "alert", 13));
+  const checking = state.probing && !env;
+  const statusPill = h(
+    "span",
+    `status-pill ${checking ? "is-idle" : ready ? "is-ready" : "is-warn"}`,
+  );
+  statusPill.appendChild(iconEl(checking ? "refresh" : ready ? "check" : "alert", 13));
   statusPill.appendChild(
-    h("span", "", t(lang, ready ? "launcher.ready" : "launcher.needsAttention")),
+    h(
+      "span",
+      "",
+      t(
+        lang,
+        checking ? "launcher.checking" : ready ? "launcher.ready" : "launcher.needsAttention",
+      ),
+    ),
   );
   panelHead.appendChild(statusPill);
 
@@ -270,7 +284,7 @@ function renderLauncher(
     panel.appendChild(error);
   }
 
-  shell.appendChild(panel);
+  body.appendChild(panel);
 
   // How to play ----------------------------------------------------------
   const howto = h("section", "howto");
@@ -288,7 +302,7 @@ function renderLauncher(
     steps.appendChild(step);
   });
   howto.appendChild(steps);
-  shell.appendChild(howto);
+  body.appendChild(howto);
 
   // Actions --------------------------------------------------------------
   const startButton = h("button", "primary-button");
@@ -304,10 +318,10 @@ function renderLauncher(
     startButton.appendChild(h("span", "", t(lang, "launcher.start")));
   }
   startButton.addEventListener("click", () => actions.start("real"));
-  shell.appendChild(startButton);
+  body.appendChild(startButton);
 
   if (blocked && env && env.issues.length > 0) {
-    shell.appendChild(h("p", "start-hint", t(lang, "launcher.startDisabled")));
+    body.appendChild(h("p", "start-hint", t(lang, "launcher.startDisabled")));
   }
 
   if (import.meta.env.DEV) {
@@ -317,8 +331,10 @@ function renderLauncher(
     demo.appendChild(h("span", "", t(lang, "launcher.demo")));
     demo.disabled = state.starting;
     demo.addEventListener("click", () => actions.start("mock"));
-    shell.appendChild(demo);
+    body.appendChild(demo);
   }
+
+  shell.appendChild(body);
 
   // Footer ---------------------------------------------------------------
   const footer = h("footer", "launcher-footer");

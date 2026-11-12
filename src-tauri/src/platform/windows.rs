@@ -6,13 +6,13 @@ use base64::Engine;
 use image::codecs::jpeg::JpegEncoder;
 use image::{ImageEncoder, RgbImage, RgbaImage};
 use windows::core::w;
-use windows::Win32::Foundation::{
-    CloseHandle, HANDLE, HWND, LPARAM, POINT, RECT, WPARAM,
-};
+use windows::Win32::Foundation::{CloseHandle, HANDLE, HWND, LPARAM, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
-    CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, GetDC, GetDIBits,
-    ReleaseDC, SelectObject, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS,
+    ClientToScreen, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, GetDC,
+    GetDIBits, ReleaseDC, ScreenToClient, SelectObject, BITMAPINFO, BITMAPINFOHEADER,
+    DIB_RGB_COLORS, HGDIOBJ,
 };
+use windows::Win32::Storage::Xps::{PrintWindow, PRINT_WINDOW_FLAGS};
 use windows::Win32::System::Diagnostics::Debug::{ReadProcessMemory, WriteProcessMemory};
 use windows::Win32::System::Memory::{
     VirtualAllocEx, VirtualFreeEx, MEM_COMMIT, MEM_RELEASE, MEM_RESERVE, PAGE_READWRITE,
@@ -21,9 +21,9 @@ use windows::Win32::System::Threading::{
     OpenProcess, PROCESS_QUERY_INFORMATION, PROCESS_VM_OPERATION, PROCESS_VM_READ, PROCESS_VM_WRITE,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    ClientToScreen, FindWindowExW, FindWindowW, GetSystemMetrics, GetWindowLongW, GetWindowRect,
-    GetWindowThreadProcessId, IsWindowVisible, PrintWindow, ScreenToClient, SendMessageTimeoutW,
-    GWL_STYLE, SMTO_ABORTIFHUNG,
+    FindWindowExW, FindWindowW, GetSystemMetrics, GetWindowLongW, GetWindowRect,
+    GetWindowThreadProcessId, IsWindowVisible, SendMessageTimeoutW, GWL_STYLE, SMTO_ABORTIFHUNG,
+    SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN,
 };
 
 use crate::error::{AppError, AppResult};
@@ -47,11 +47,6 @@ const LVIF_TEXT: u32 = 0x0001;
 const LVIF_STATE: u32 = 0x0008;
 const LVIS_FOCUSED: u32 = 0x0001;
 const LVIS_SELECTED: u32 = 0x0002;
-
-const SM_XVIRTUALSCREEN: i32 = 76;
-const SM_YVIRTUALSCREEN: i32 = 77;
-const SM_CXVIRTUALSCREEN: i32 = 78;
-const SM_CYVIRTUALSCREEN: i32 = 79;
 
 const REMOTE_SIZE: usize = 65536;
 const TEXT_OFFSET: usize = 4096;
@@ -173,11 +168,17 @@ impl Desktop {
             GetWindowThreadProcessId(listview, Some(&mut pid));
         }
         if pid == 0 {
-            return Err(AppError::with_detail("desktop_not_found", "explorer pid unavailable"));
+            return Err(AppError::with_detail(
+                "desktop_not_found",
+                "explorer pid unavailable",
+            ));
         }
         let handle = unsafe {
             OpenProcess(
-                PROCESS_VM_OPERATION | PROCESS_VM_READ | PROCESS_VM_WRITE | PROCESS_QUERY_INFORMATION,
+                PROCESS_VM_OPERATION
+                    | PROCESS_VM_READ
+                    | PROCESS_VM_WRITE
+                    | PROCESS_QUERY_INFORMATION,
                 false,
                 pid,
             )
@@ -271,7 +272,10 @@ impl Desktop {
             )
         }
         .map_err(|err| AppError::with_detail("desktop_read", err.to_string()))?;
-        let len = buffer.iter().position(|ch| *ch == 0).unwrap_or(buffer.len());
+        let len = buffer
+            .iter()
+            .position(|ch| *ch == 0)
+            .unwrap_or(buffer.len());
         Ok(String::from_utf16_lossy(&buffer[..len]))
     }
 
@@ -419,13 +423,19 @@ fn listview_msg(msg: u32, wparam: usize, lparam: isize) -> (u32, usize, isize) {
 }
 
 fn find_desktop_windows() -> Option<(HWND, HWND, HWND)> {
-    let progman = unsafe { FindWindowW(w!("Progman"), None) };
+    let progman = unsafe { FindWindowW(w!("Progman"), None) }
+        .ok()
+        .unwrap_or_default();
     if !progman.0.is_null() {
-        let defview = unsafe { FindWindowExW(progman, None, w!("SHELLDLL_DefView"), None) };
-        if !defview.0.is_null() {
-            let listview = unsafe { FindWindowExW(defview, None, w!("SysListView32"), None) };
-            if !listview.0.is_null() {
-                return Some((progman, defview, listview));
+        if let Ok(defview) =
+            unsafe { FindWindowExW(Some(progman), None, w!("SHELLDLL_DefView"), None) }
+        {
+            if let Ok(listview) =
+                unsafe { FindWindowExW(Some(defview), None, w!("SysListView32"), None) }
+            {
+                if !listview.0.is_null() {
+                    return Some((progman, defview, listview));
+                }
             }
         }
     }
@@ -433,15 +443,27 @@ fn find_desktop_windows() -> Option<(HWND, HWND, HWND)> {
     // 部分 Windows 版本把桌面视图挂在顶层 WorkerW 下。
     let mut worker = HWND::default();
     loop {
-        worker = unsafe { FindWindowExW(None, worker, w!("WorkerW"), None) };
-        if worker.0.is_null() {
+        let after = if worker.0.is_null() {
+            None
+        } else {
+            Some(worker)
+        };
+        let Ok(next) = (unsafe { FindWindowExW(None, after, w!("WorkerW"), None) }) else {
+            break;
+        };
+        if next.0.is_null() {
             break;
         }
-        let defview = unsafe { FindWindowExW(worker, None, w!("SHELLDLL_DefView"), None) };
-        if !defview.0.is_null() {
-            let listview = unsafe { FindWindowExW(defview, None, w!("SysListView32"), None) };
-            if !listview.0.is_null() {
-                return Some((worker, defview, listview));
+        worker = next;
+        if let Ok(defview) =
+            unsafe { FindWindowExW(Some(worker), None, w!("SHELLDLL_DefView"), None) }
+        {
+            if let Ok(listview) =
+                unsafe { FindWindowExW(Some(defview), None, w!("SysListView32"), None) }
+            {
+                if !listview.0.is_null() {
+                    return Some((worker, defview, listview));
+                }
             }
         }
     }
@@ -512,8 +534,8 @@ fn capture_window(hwnd: HWND) -> AppResult<(RgbaImage, RECT)> {
     let mut rect = RECT::default();
     unsafe { GetWindowRect(hwnd, &mut rect) }
         .map_err(|err| AppError::with_detail("screen_capture_failed", err.to_string()))?;
-    let width = (rect.right - rect.left).max(1) as i32;
-    let height = (rect.bottom - rect.top).max(1) as i32;
+    let width = (rect.right - rect.left).max(1);
+    let height = (rect.bottom - rect.top).max(1);
 
     let screen_dc = unsafe { GetDC(None) };
     if screen_dc.0.is_null() {
@@ -522,10 +544,10 @@ fn capture_window(hwnd: HWND) -> AppResult<(RgbaImage, RECT)> {
             "GetDC failed",
         ));
     }
-    let mem_dc = unsafe { CreateCompatibleDC(screen_dc) };
+    let mem_dc = unsafe { CreateCompatibleDC(Some(screen_dc)) };
     if mem_dc.0.is_null() {
         unsafe {
-            ReleaseDC(None, screen_dc);
+            let _ = ReleaseDC(None, screen_dc);
         }
         return Err(AppError::with_detail(
             "screen_capture_failed",
@@ -535,23 +557,23 @@ fn capture_window(hwnd: HWND) -> AppResult<(RgbaImage, RECT)> {
     let bitmap = unsafe { CreateCompatibleBitmap(screen_dc, width, height) };
     if bitmap.0.is_null() {
         unsafe {
-            DeleteDC(mem_dc);
-            ReleaseDC(None, screen_dc);
+            let _ = DeleteDC(mem_dc);
+            let _ = ReleaseDC(None, screen_dc);
         }
         return Err(AppError::with_detail(
             "screen_capture_failed",
             "CreateCompatibleBitmap failed",
         ));
     }
-    let old = unsafe { SelectObject(mem_dc, bitmap) };
+    let old = unsafe { SelectObject(mem_dc, HGDIOBJ(bitmap.0)) };
 
-    let ok = unsafe { PrintWindow(hwnd, mem_dc, 2) };
+    let ok = unsafe { PrintWindow(hwnd, mem_dc, PRINT_WINDOW_FLAGS(2)) };
     if !ok.as_bool() {
         unsafe {
-            SelectObject(mem_dc, old);
-            DeleteObject(bitmap);
-            DeleteDC(mem_dc);
-            ReleaseDC(None, screen_dc);
+            let _ = SelectObject(mem_dc, old);
+            let _ = DeleteObject(HGDIOBJ(bitmap.0));
+            let _ = DeleteDC(mem_dc);
+            let _ = ReleaseDC(None, screen_dc);
         }
         return Err(AppError::with_detail(
             "screen_capture_failed",
@@ -580,10 +602,10 @@ fn capture_window(hwnd: HWND) -> AppResult<(RgbaImage, RECT)> {
         )
     };
     unsafe {
-        SelectObject(mem_dc, old);
-        DeleteObject(bitmap);
-        DeleteDC(mem_dc);
-        ReleaseDC(None, screen_dc);
+        let _ = SelectObject(mem_dc, old);
+        let _ = DeleteObject(HGDIOBJ(bitmap.0));
+        let _ = DeleteDC(mem_dc);
+        let _ = ReleaseDC(None, screen_dc);
     }
     if got == 0 {
         return Err(AppError::with_detail(
@@ -736,7 +758,12 @@ fn tone_for_cell(clean: &RgbaImage, origin: RECT, cell: RectI) -> Tone {
     }
 }
 
-fn extract_icon(with_icons: &RgbaImage, clean: &RgbaImage, origin: RECT, cell: RectI) -> Option<String> {
+fn extract_icon(
+    with_icons: &RgbaImage,
+    clean: &RgbaImage,
+    origin: RECT,
+    cell: RectI,
+) -> Option<String> {
     let x = cell.x - origin.left;
     let y = cell.y - origin.top;
     let w = cell.w;
@@ -886,7 +913,7 @@ pub fn fingerprint() -> AppResult<String> {
 }
 
 pub fn capture(monitors: &[MonitorInfo]) -> AppResult<Captured> {
-    let mut desktop = Desktop::open()?;
+    let desktop = Desktop::open()?;
     if !desktop.icons_visible() {
         return Err(AppError::new("icons_hidden"));
     }

@@ -1,5 +1,4 @@
-use crate::error::AppResult;
-use crate::model::{IconRecord, MonitorInfo};
+use crate::model::IconRecord;
 
 pub struct ProbeData {
     pub icon_count: usize,
@@ -7,6 +6,7 @@ pub struct ProbeData {
     pub icons_visible: bool,
     pub desktop_found: bool,
     pub permission_denied: bool,
+    #[allow(dead_code)]
     pub detail: Option<String>,
 }
 
@@ -28,8 +28,3 @@ mod unsupported;
 pub use unsupported::{apply_positions, capture, fingerprint, probe, verify_positions};
 
 pub type LayoutPositions = Vec<(u32, i32, i32)>;
-
-#[allow(dead_code)]
-fn unsupported_capture(_monitors: &[MonitorInfo]) -> AppResult<Captured> {
-    Err(crate::error::AppError::new("unsupported_platform"))
-}

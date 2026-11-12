@@ -1,13 +1,13 @@
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use rand::seq::SliceRandom;
-use rand::thread_rng;
+use rand::{thread_rng, Rng};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{AppError, AppResult};
 use crate::geometry;
 use crate::model::{
-    EnvReport, GlobalSlotView, IconRecord, IconView, MonitorInfo, OverlayView, PublicState, RectI,
+    GlobalSlotView, IconRecord, IconView, MonitorInfo, OverlayView, PublicState, RectI,
     RoundResult, Snapshot, Tone,
 };
 
@@ -164,7 +164,8 @@ impl Round {
             .find(|monitor| monitor.index == monitor_index)
             .cloned()
             .ok_or_else(|| AppError::new("unknown_monitor"))?;
-        let slots = geometry::slot_views(&self.snapshot.icons, &self.snapshot.monitors, monitor_index);
+        let slots =
+            geometry::slot_views(&self.snapshot.icons, &self.snapshot.monitors, monitor_index);
         let global_slots = self
             .snapshot
             .icons
@@ -285,25 +286,21 @@ impl LayoutBackup {
     }
 }
 
-pub fn empty_env(monitors: Vec<MonitorInfo>, muted: bool) -> EnvReport {
-    EnvReport {
-        platform: "windows".into(),
-        icon_count: 0,
-        auto_arrange: false,
-        icons_visible: false,
-        desktop_found: false,
-        monitors,
-        muted,
-        mock: false,
-        issues: vec!["desktop_not_found".into()],
-    }
-}
-
 /// 仅用于开发调试：在本机屏幕上生成 12 张假牌，不触碰真实桌面。
 pub fn mock_snapshot(monitors: &[MonitorInfo]) -> Snapshot {
     let names = [
-        "Projects", "Invoices", "Screenshots", "Notes", "Music", "Camera", "Downloads",
-        "Archive", "Sketches", "Slides", "Budget", "Links",
+        "Projects",
+        "Invoices",
+        "Screenshots",
+        "Notes",
+        "Music",
+        "Camera",
+        "Downloads",
+        "Archive",
+        "Sketches",
+        "Slides",
+        "Budget",
+        "Links",
     ];
     let primary = monitors
         .iter()
@@ -437,8 +434,8 @@ mod tests {
         let mut round = test_round();
         round.placements = (0..round.total()).map(|i| Some(i as u32)).collect();
         round.pool.clear();
-        round.finish().unwrap();
         round.move_card(0, 1).unwrap();
+        round.finish().unwrap();
         let positions = round.new_layout_positions().unwrap();
         let icon0 = positions.iter().find(|(id, _, _)| *id == 0).unwrap();
         let slot1 = round.snapshot.icons[1].cell;

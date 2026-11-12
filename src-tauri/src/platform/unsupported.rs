@@ -1,5 +1,5 @@
 use crate::error::{AppError, AppResult};
-use crate::model::{IconRecord, MonitorInfo};
+use crate::model::MonitorInfo;
 
 use super::{Captured, LayoutPositions, ProbeData};
 
@@ -29,6 +29,3 @@ pub fn apply_positions(_positions: &LayoutPositions) -> AppResult<()> {
 pub fn verify_positions(_positions: &LayoutPositions) -> AppResult<()> {
     Err(AppError::new("unsupported_platform"))
 }
-
-#[allow(dead_code)]
-fn _keep_icon_type(_icon: IconRecord) {}

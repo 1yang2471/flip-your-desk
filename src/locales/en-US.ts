@@ -20,6 +20,7 @@ export const enUS = {
   "launcher.value.visible": "Visible",
   "launcher.value.hidden": "Hidden",
   "launcher.ready": "Ready",
+  "launcher.checking": "Checking",
   "launcher.needsAttention": "Needs attention",
   "launcher.issueTitle": "Fix these before starting",
   "launcher.start": "Start",
@@ -50,6 +51,7 @@ export const enUS = {
   "issue.too_few_icons.hint": "You need at least 2 desktop icons to start.",
 
   "overlay.progress": "{revealed} of {total} revealed",
+  "overlay.boardAria": "Desktop cards",
   "overlay.confirm": "Confirm",
   "overlay.confirmAria": "Finish the round and see your accuracy",
   "overlay.esc": "Esc to quit",

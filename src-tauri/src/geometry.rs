@@ -36,7 +36,11 @@ pub fn monitor_for_cell(cell: RectI, monitors: &[MonitorInfo]) -> usize {
         .unwrap_or(0)
 }
 
-pub fn slot_views(icons: &[IconRecord], monitors: &[MonitorInfo], monitor_index: usize) -> Vec<SlotView> {
+pub fn slot_views(
+    icons: &[IconRecord],
+    monitors: &[MonitorInfo],
+    monitor_index: usize,
+) -> Vec<SlotView> {
     let Some(monitor) = monitors.iter().find(|m| m.index == monitor_index) else {
         return Vec::new();
     };
@@ -62,6 +66,8 @@ pub fn slot_views(icons: &[IconRecord], monitors: &[MonitorInfo], monitor_index:
 }
 
 /// 全局物理坐标命中哪个槽位；多张牌重叠时取中心最近的一张。
+/// 前端做实时命中测试，后端保留这份实现用于校验与单元测试。
+#[allow(dead_code)]
 pub fn hit_test(slots: &[SlotView], global_x: i32, global_y: i32) -> Option<u32> {
     slots
         .iter()
@@ -100,7 +106,12 @@ mod tests {
     #[test]
     fn card_rect_insets_by_css_pixels() {
         let (x, y, w, h) = card_rect_css(
-            RectI { x: 14, y: 2, w: 76, h: 100 },
+            RectI {
+                x: 14,
+                y: 2,
+                w: 76,
+                h: 100,
+            },
             &monitor(),
             CARD_INSET,
         );
@@ -115,7 +126,12 @@ mod tests {
         let mut monitor = monitor();
         monitor.scale = 1.5;
         let (x, y, w, h) = card_rect_css(
-            RectI { x: 21, y: 3, w: 114, h: 150 },
+            RectI {
+                x: 21,
+                y: 3,
+                w: 114,
+                h: 150,
+            },
             &monitor,
             CARD_INSET,
         );
@@ -138,7 +154,12 @@ mod tests {
             primary: false,
         };
         let (x, y, _, _) = card_rect_css(
-            RectI { x: -1900, y: 10, w: 76, h: 100 },
+            RectI {
+                x: -1900,
+                y: 10,
+                w: 76,
+                h: 100,
+            },
             &monitor,
             CARD_INSET,
         );

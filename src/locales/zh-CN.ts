@@ -18,6 +18,7 @@ export const zhCN = {
   "launcher.value.visible": "可见",
   "launcher.value.hidden": "已隐藏",
   "launcher.ready": "就绪",
+  "launcher.checking": "检测中",
   "launcher.needsAttention": "需要处理",
   "launcher.issueTitle": "开始前需要处理",
   "launcher.start": "开始游戏",
@@ -48,6 +49,7 @@ export const zhCN = {
   "issue.too_few_icons.hint": "至少需要 2 个桌面图标才能开始。",
 
   "overlay.progress": "已翻开 {revealed}/{total}",
+  "overlay.boardAria": "桌面卡牌",
   "overlay.confirm": "确定",
   "overlay.confirmAria": "结束本局并查看正确率",
   "overlay.esc": "Esc 退出",

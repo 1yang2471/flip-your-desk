@@ -13,7 +13,8 @@ use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder
 use error::{AppError, AppResult};
 use game::{LayoutBackup, Round};
 use model::{
-    DragHover, EnvReport, MonitorInfo, OverlayView, PublicState, RoundResult, Snapshot, StartResponse,
+    DragHover, EnvReport, MonitorInfo, OverlayView, PublicState, RoundResult, Snapshot,
+    StartResponse,
 };
 
 pub struct AppState {
@@ -26,7 +27,6 @@ struct InnerState {
     monitors: Vec<MonitorInfo>,
     ready: HashSet<usize>,
     muted: bool,
-    locale: String,
     start_token: u64,
 }
 
@@ -39,7 +39,10 @@ impl Default for AppState {
 }
 
 fn lock_state(state: &AppState) -> std::sync::MutexGuard<'_, InnerState> {
-    state.inner.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    state
+        .inner
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 fn monitors_of(app: &AppHandle) -> AppResult<Vec<MonitorInfo>> {
@@ -166,18 +169,21 @@ fn create_overlays(app: &AppHandle, monitors: &[MonitorInfo]) -> AppResult<Vec<u
                 ));
             }
         };
-        if let Err(err) = window.set_position(tauri::PhysicalPosition::new(monitor.x, monitor.y))
-        {
+        if let Err(err) = window.set_position(tauri::PhysicalPosition::new(monitor.x, monitor.y)) {
             let _ = window.close();
             close_overlays(app, created.len());
-            return Err(AppError::with_detail("overlay_position_failed", err.to_string()));
+            return Err(AppError::with_detail(
+                "overlay_position_failed",
+                err.to_string(),
+            ));
         }
-        if let Err(err) =
-            window.set_size(tauri::PhysicalSize::new(monitor.width, monitor.height))
-        {
+        if let Err(err) = window.set_size(tauri::PhysicalSize::new(monitor.width, monitor.height)) {
             let _ = window.close();
             close_overlays(app, created.len());
-            return Err(AppError::with_detail("overlay_size_failed", err.to_string()));
+            return Err(AppError::with_detail(
+                "overlay_size_failed",
+                err.to_string(),
+            ));
         }
         created.push(monitor.index);
     }
@@ -217,16 +223,12 @@ async fn start_round(
     }
 
     let (muted, token) = {
-        let mut inner = lock_state(&state);
-        let old_count = inner.monitors.len();
-        drop(inner);
+        let old_count = lock_state(&state).monitors.len();
         close_overlays(&app, old_count);
         let mut inner = lock_state(&state);
         inner.start_token += 1;
         inner.ready.clear();
-        inner.muted = inner.muted;
         let muted = inner.muted;
-        inner.locale = locale.clone();
         (muted, inner.start_token)
     };
 
@@ -280,9 +282,9 @@ fn overlay_ready(app: AppHandle, state: State<'_, AppState>, monitor: usize) -> 
     let mut primary = None;
     {
         let mut inner = lock_state(&state);
-        let Some(round) = inner.round.as_ref() else {
+        if inner.round.is_none() {
             return Err(AppError::new("no_round"));
-        };
+        }
         if !inner.monitors.iter().any(|m| m.index == monitor) {
             return Err(AppError::new("unknown_monitor"));
         }
@@ -292,11 +294,7 @@ fn overlay_ready(app: AppHandle, state: State<'_, AppState>, monitor: usize) -> 
                 round.begin();
                 public = Some(round.public_state());
             }
-            primary = inner
-                .monitors
-                .iter()
-                .find(|m| m.primary)
-                .map(|m| m.index);
+            primary = inner.monitors.iter().find(|m| m.primary).map(|m| m.index);
             ready = true;
         }
     }
@@ -326,7 +324,10 @@ fn overlay_ready(app: AppHandle, state: State<'_, AppState>, monitor: usize) -> 
 #[tauri::command]
 fn get_overlay_view(state: State<'_, AppState>, monitor: usize) -> AppResult<OverlayView> {
     let inner = lock_state(&state);
-    let round = inner.round.as_ref().ok_or_else(|| AppError::new("no_round"))?;
+    let round = inner
+        .round
+        .as_ref()
+        .ok_or_else(|| AppError::new("no_round"))?;
     round.overlay_view(monitor)
 }
 
@@ -334,7 +335,10 @@ fn get_overlay_view(state: State<'_, AppState>, monitor: usize) -> AppResult<Ove
 fn draw_card(app: AppHandle, state: State<'_, AppState>, slot: u32) -> AppResult<()> {
     let public = {
         let mut inner = lock_state(&state);
-        let round = inner.round.as_mut().ok_or_else(|| AppError::new("no_round"))?;
+        let round = inner
+            .round
+            .as_mut()
+            .ok_or_else(|| AppError::new("no_round"))?;
         round.draw(slot)?;
         round.public_state()
     };
@@ -351,7 +355,10 @@ fn move_card(
 ) -> AppResult<()> {
     let public = {
         let mut inner = lock_state(&state);
-        let round = inner.round.as_mut().ok_or_else(|| AppError::new("no_round"))?;
+        let round = inner
+            .round
+            .as_mut()
+            .ok_or_else(|| AppError::new("no_round"))?;
         round.move_card(from_slot, to_slot)?;
         round.public_state()
     };
@@ -368,7 +375,10 @@ fn set_drag_hover(app: AppHandle, slot: Option<u32>) {
 fn finish_round(app: AppHandle, state: State<'_, AppState>) -> AppResult<RoundResult> {
     let (result, public) = {
         let mut inner = lock_state(&state);
-        let round = inner.round.as_mut().ok_or_else(|| AppError::new("no_round"))?;
+        let round = inner
+            .round
+            .as_mut()
+            .ok_or_else(|| AppError::new("no_round"))?;
         let result = round.finish()?;
         (result, round.public_state())
     };
@@ -380,7 +390,10 @@ fn finish_round(app: AppHandle, state: State<'_, AppState>) -> AppResult<RoundRe
 fn replay_round(app: AppHandle, state: State<'_, AppState>) -> AppResult<()> {
     let public = {
         let mut inner = lock_state(&state);
-        let round = inner.round.as_mut().ok_or_else(|| AppError::new("no_round"))?;
+        let round = inner
+            .round
+            .as_mut()
+            .ok_or_else(|| AppError::new("no_round"))?;
         round.replay();
         round.public_state()
     };
@@ -425,7 +438,10 @@ fn write_backup(app: &AppHandle, backup: &LayoutBackup) -> AppResult<std::path::
 async fn save_and_exit(app: AppHandle, state: State<'_, AppState>) -> AppResult<()> {
     let (positions, original, backup, fingerprint, total) = {
         let inner = lock_state(&state);
-        let round = inner.round.as_ref().ok_or_else(|| AppError::new("no_round"))?;
+        let round = inner
+            .round
+            .as_ref()
+            .ok_or_else(|| AppError::new("no_round"))?;
         (
             round.new_layout_positions()?,
             round.original_positions(),
@@ -442,8 +458,7 @@ async fn save_and_exit(app: AppHandle, state: State<'_, AppState>) -> AppResult<
         return Err(AppError::new("desktop_changed"));
     }
     write_backup(&app, &backup)?;
-    match platform::apply_positions(&positions)
-        .and_then(|_| platform::verify_positions(&positions))
+    match platform::apply_positions(&positions).and_then(|_| platform::verify_positions(&positions))
     {
         Ok(()) => {
             app.exit(0);
@@ -452,7 +467,10 @@ async fn save_and_exit(app: AppHandle, state: State<'_, AppState>) -> AppResult<
         Err(err) => {
             let _ = platform::apply_positions(&original);
             let _ = platform::verify_positions(&original);
-            Err(AppError::with_detail("save_failed_restored", err.to_string()))
+            Err(AppError::with_detail(
+                "save_failed_restored",
+                err.to_string(),
+            ))
         }
     }
 }
@@ -461,7 +479,10 @@ async fn save_and_exit(app: AppHandle, state: State<'_, AppState>) -> AppResult<
 async fn restore_and_exit(app: AppHandle, state: State<'_, AppState>) -> AppResult<()> {
     let (original, fingerprint) = {
         let inner = lock_state(&state);
-        let round = inner.round.as_ref().ok_or_else(|| AppError::new("no_round"))?;
+        let round = inner
+            .round
+            .as_ref()
+            .ok_or_else(|| AppError::new("no_round"))?;
         (
             round.original_positions(),
             round.snapshot.fingerprint.clone(),
