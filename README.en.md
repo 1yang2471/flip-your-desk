@@ -68,11 +68,19 @@ You need Node.js 20+, stable Rust, the Microsoft C++ Build Tools (with the Windo
 
 ```bash
 npm install
-npm run tauri dev      # development run
+npm run tauri dev      # development run (starts a local Vite server on 127.0.0.1:1420)
 npm run tauri build    # installers land in src-tauri/target/release/bundle
 ```
 
-Type-check the frontend with `npm run check`; run the backend unit tests with `cargo test --manifest-path src-tauri/Cargo.toml`.
+> **Do not ship a `cargo build --release` binary.** It compiles the Rust part only and
+> never embeds the frontend `dist/`, so the app falls back to the dev URL
+> `127.0.0.1:1420` and shows "This site can't be reached". A real release embeds the
+> frontend assets (`assets/index-*.css/js`) and opens no ports at runtime.
+> `scripts/run-tauri-build.cmd` loads the MSVC environment and runs the correct build.
+
+Type-check the frontend with `npm run check`; run the backend unit tests with
+`cargo test --manifest-path src-tauri/Cargo.toml`; run the UI regression suite
+(face geometry, i18n, motion, audio) with `npm test` after `npm run build`.
 
 ## Known limitations
 

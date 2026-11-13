@@ -68,11 +68,18 @@
 
 ```bash
 npm install
-npm run tauri dev      # 开发运行
+npm run tauri dev      # 开发运行（会启动本地 Vite 服务 127.0.0.1:1420）
 npm run tauri build    # 生成安装包（输出在 src-tauri/target/release/bundle）
 ```
 
-前端类型检查：`npm run check`；后端单元测试：`cargo test --manifest-path src-tauri/Cargo.toml`。
+> **不要用 `cargo build --release` 交付。** 它只编 Rust 二进制，不会把前端 `dist/`
+> 嵌进 exe，跑起来会回退去找开发地址 `127.0.0.1:1420` 并显示「无法访问此页面」。
+> 正式包的判定标准：exe 内嵌前端的资源文件名（`assets/index-*.css/js`），
+> 启动后不监听任何端口。本仓库的 `scripts/run-tauri-build.cmd` 会自动加载 MSVC
+> 环境并执行正确的构建流程。
+
+前端类型检查：`npm run check`；后端单元测试：`cargo test --manifest-path src-tauri/Cargo.toml`；
+卡面/双语/动效的界面回归测试：`npm test`（需先 `npm run build`）。
 
 ## 已知限制
 
