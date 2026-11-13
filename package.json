@@ -11,7 +11,8 @@
     "tauri": "tauri",
     "check": "tsc --noEmit",
     "test": "node tests/ui.test.mjs",
-    "exe": "scripts\\run-tauri-build.cmd"
+    "exe": "scripts\\run-tauri-build.cmd",
+    "dev:tauri": "scripts\\run-tauri-dev.cmd"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.0.0"
