@@ -14,7 +14,11 @@
 
 ## 截图
 
-<!-- 截图将在首个 Release 后补充 -->
+| 启动窗 | 牌桌 | 结算 |
+| --- | --- | --- |
+| ![启动窗](docs/screenshot-launcher.png) | ![牌桌](docs/screenshot-board.png) | ![结算](docs/screenshot-result.png) |
+
+![玩法演示](docs/demo.gif)
 
 ## 安装
 
