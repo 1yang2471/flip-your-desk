@@ -46,6 +46,7 @@ const LVM_GETITEMSPACING: u32 = 0x1033;
 const LVM_SETITEMSTATE: u32 = 0x102B;
 const LVM_GETITEMRECT: u32 = 0x100E;
 
+#[cfg(test)]
 const LVIR_ICON: i32 = 1;
 const LVIR_LABEL: i32 = 2;
 
