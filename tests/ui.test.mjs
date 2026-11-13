@@ -26,7 +26,7 @@ function scene() {
   return `<!doctype html><html><head><meta charset="utf-8"><style>${cssText}</style></head>
 <body style="margin:0"><div class="overlay-root"><div class="board">
 <button class="card card-back" id="back" style="width:76px;height:100px;transform:translate3d(0,0,0)">
-  <span class="card-inner card-back-inner"><span class="card-back-mark">?</span><span class="card-back-dot"></span></span>
+  <span class="card-inner card-back-inner"><span class="card-back-mark">?</span></span>
 </button>
 <button class="card card-face" id="face" style="width:76px;height:100px;transform:translate3d(200px,0,0)">
   <span class="card-inner card-face-inner is-photo">
@@ -317,6 +317,173 @@ test("新手势开始时复位 click 抑制，并拒绝并发拖拽", () => {
   );
   assert.match(down, /this\.suppressClick = false/, "pointerdown 必须复位 suppressClick");
   assert.match(down, /if \(this\.drag\) return/, "已有拖拽时必须拒绝第二个 pointerdown");
+});
+
+// ---------------------------------------------------------- 材质化音效（Area 1）
+
+/** 取 TS 类方法体：从方法名到下一个两空格缩进的闭大括号。 */
+function methodBody(source, name) {
+  const start = source.indexOf(`${name}(`);
+  if (start < 0) return "";
+  const end = source.indexOf("\n  }", start);
+  return end < 0 ? "" : source.slice(start, end);
+}
+
+test("音效材质化：flip/pickup/drop 每次播放有 ±4% 随机音高微变", () => {
+  const source = readFileSync(join(ROOT, "src/audio.ts"), "utf8");
+  assert.match(source, /humanize\(\):\s*number/, "需要 humanize 随机倍率助手");
+  for (const name of ["flip", "pickup", "drop"]) {
+    const body = methodBody(source, name);
+    assert.ok(body.includes("humanize"), `${name}() 必须用 humanize 做随机音高`);
+  }
+});
+
+test("音效材质化：落卡 = 低频冲击 + lowpass 呢面摩擦尾", () => {
+  const source = readFileSync(join(ROOT, "src/audio.ts"), "utf8");
+  const body = methodBody(source, "drop");
+  assert.match(body, /"lowpass"/, "落卡需要 lowpass 摩擦尾（呢面质感）");
+  assert.match(body, /tone\(/, "落卡需要低频冲击音");
+});
+
+test("音效材质化：pickup 是纸面摩擦（带通噪声扫频），不是单音哔声", () => {
+  const source = readFileSync(join(ROOT, "src/audio.ts"), "utf8");
+  const body = methodBody(source, "pickup");
+  assert.match(body, /noise\(/, "拿起应使用噪声摩擦");
+  assert.match(body, /\d{3,4}.*\d{3,4}/s, "摩擦应有起止频率（扫频）");
+});
+
+test("发牌 tick：dealTick 声部存在，deal 节流间隔短于通用 40ms", () => {
+  const source = readFileSync(join(ROOT, "src/audio.ts"), "utf8");
+  assert.match(source, /dealTick\(\): void/, "需要 dealTick 声部");
+  assert.match(source, /MIN_INTERVALS[^;]*deal:\s*(\d+)/, "deal 需要专用节流间隔");
+  const interval = Number(source.match(/MIN_INTERVALS[^;]*deal:\s*(\d+)/)?.[1]);
+  assert.ok(interval < 40, `deal 间隔 ${interval}ms 必须小于通用 40ms`);
+});
+
+// ---------------------------------------------------------- 卡背扑克化（Area 2）
+
+test("卡背扑克化：内嵌细线框（::after，1px 描边，inset ≥3px）", async () => {
+  const info = await fresh(`(() => {
+    const cs = getComputedStyle(document.querySelector('.card-back-inner'), '::after');
+    return { content: cs.content, width: cs.borderTopWidth, style: cs.borderTopStyle,
+             top: cs.top, left: cs.left };
+  })()`);
+  assert.equal(info.content, '""', "内框必须是伪元素画的");
+  assert.equal(info.width, "1px", "框线 1px");
+  assert.notEqual(info.style, "none", "框线样式不能为 none");
+  assert.match(info.top, /^[3-9](\.\d+)?px$/, `内框 inset 应在 3-9px，实际 ${info.top}`);
+});
+
+test("卡背扑克化：四角圆点存在且不拦截指针", async () => {
+  const info = await fresh(`(() => {
+    const cs = getComputedStyle(document.querySelector('.card-back-inner'), '::before');
+    const matches = cs.backgroundImage.match(/radial-gradient/g) ?? [];
+    return { count: matches.length, pointer: cs.pointerEvents };
+  })()`);
+  assert.ok(info.count >= 4, `四角圆点需要 4 个 radial-gradient，实际 ${info.count}`);
+  assert.equal(info.pointer, "none", "装饰层不得拦截指针");
+});
+
+test("卡背扑克化：深浅 tone 各有内框配色", () => {
+  // vite 压缩会去掉属性选择器值的引号：data-tone="light" → data-tone=light
+  assert.match(cssText, /\.card\[data-tone="?light"?\] \.card-back-inner::?after/, "浅色卡背要有内框配色变体");
+});
+
+// ---------------------------------------------------------- 错误 shake（Area 3）
+
+test("错误反馈：API 失败对涉事卡 shake，用 WAAPI 叠加合成（不替换 3D 翻转动画）", () => {
+  const source = readFileSync(join(ROOT, "src/overlay.ts"), "utf8");
+  const shake = methodBody(source, "private shake");
+  assert.match(shake, /animate\(/, "shake 需要元素动画");
+  assert.match(shake, /composite:\s*"add"/,
+    "必须叠加合成：替换式 CSS 动画会顶掉 face 靠 forwards 撑住的 rotateY 基线，卡面会隐身");
+  const calls = source.match(/this\.shake\(/g) ?? [];
+  assert.ok(calls.length >= 4,
+    `抽牌/拖拽/键盘换位四条失败路径都要 shake（实际 ${calls.length} 处）`);
+});
+
+test("错误反馈：shake 跳过 reduced-motion 用户", () => {
+  const source = readFileSync(join(ROOT, "src/overlay.ts"), "utf8");
+  const shake = methodBody(source, "private shake");
+  assert.match(shake, /prefers-reduced-motion/, "shake 必须检查 reduced-motion 并跳过");
+});
+
+// ---------------------------------------------------------- 发牌级联（Area 4）
+
+test("发牌级联：buildBoard 按 y/x 排序逐卡延迟，延迟只在首建路径", () => {
+  const source = readFileSync(join(ROOT, "src/overlay.ts"), "utf8");
+  const build = methodBody(source, "private buildBoard");
+  assert.match(build, /sort\(/, "发牌要按位置排序（先 y 后 x，像发牌员摆牌）");
+  assert.match(build, /backwards/, "延迟期间卡背必须用 fill backwards 保持隐形");
+  const ensure = methodBody(source, "private ensureBack");
+  assert.doesNotMatch(ensure, /backwards|animationDelay/,
+    "中途盖回（applyState 调 ensureBack）不得带延迟，否则换位后卡背凭空消失一拍");
+});
+
+test("发牌级联：dealTick 只在主屏播、reduced-motion 跳过、销毁时清理定时器", () => {
+  const source = readFileSync(join(ROOT, "src/overlay.ts"), "utf8");
+  const build = methodBody(source, "private buildBoard");
+  assert.match(build, /isPrimary/, "发牌音只在主屏播，避免多显示器叠声");
+  assert.match(build, /prefers-reduced-motion/, "reduced-motion 必须跳过级联");
+  const destroyStart = source.indexOf("destroy(): void");
+  const destroy = source.slice(destroyStart, source.indexOf("\n  }", destroyStart));
+  assert.match(destroy, /dealTimers/, "销毁时必须清理发牌定时器");
+});
+
+// ---------------------------------------------------------- 手感闭环（Area 5）
+
+/** 提取 CSS 文本中从 startMarker 起的完整规则块（括号配平）。 */
+function cssBlock(text, startMarker) {
+  const start = text.indexOf(startMarker);
+  if (start < 0) return "";
+  let depth = 0;
+  let i = text.indexOf("{", start);
+  const begin = i;
+  for (; i < text.length; i += 1) {
+    if (text[i] === "{") depth += 1;
+    else if (text[i] === "}") {
+      depth -= 1;
+      if (depth === 0) return text.slice(start, i + 1);
+    }
+  }
+  return "";
+}
+
+test("翻牌弧线：翻转中途放大（keyframes 中段 scale >1），时长 320ms", () => {
+  const block = cssBlock(cssText, "@keyframes card-flip-3d-in");
+  assert.ok(block, "keyframes 必须存在");
+  assert.match(block, /scale\(1\.0[4-9]/, "翻转中段要有 scale >1 的抛物线弧");
+  // vite 压缩会把 320ms 缩写成 .32s，两种形式都接受
+  assert.match(cssText, /card-flip-3d-in (\.\d+s|320ms)/, "翻牌时长 320ms");
+});
+
+test("拖拽倾斜：跟随速度微倾斜且有 ±3° clamp，归位 transform 不残留旋转", () => {
+  const source = readFileSync(join(ROOT, "src/overlay.ts"), "utf8");
+  const move = methodBody(source, "private onPointerMove");
+  assert.match(move, /rotate\(/, "拖动中 transform 要组合 rotate");
+  assert.match(move, /Math\.max\(-3/, "倾斜必须有 -3° 下限");
+  assert.match(move, /Math\.min\(3/, "倾斜必须有 +3° 上限");
+  const finish = methodBody(source, "private finishDrag");
+  assert.doesNotMatch(finish, /rotate\(/, "归位 transform 不得残留 rotate");
+});
+
+test("落卡回弹：成功落卡播 120ms settle（叠加合成 + reduced-motion 跳过）", () => {
+  const source = readFileSync(join(ROOT, "src/overlay.ts"), "utf8");
+  const settle = methodBody(source, "private settle");
+  assert.match(settle, /animate\(/, "settle 需要元素动画");
+  assert.match(settle, /composite:\s*"add"/, "settle 必须叠加合成，理由同 shake");
+  assert.match(settle, /prefers-reduced-motion/, "settle 必须跳过 reduced-motion");
+  const finish = methodBody(source, "private finishDrag");
+  assert.match(finish, /this\.settle\(/, "成功落卡路径要调 settle");
+});
+
+// ---------------------------------------------------------- 启动窗微打磨（Area 6）
+
+test("启动窗微打磨：brand 卡牌 hover 摆正、窗口淡入、次级按钮有 active 态", () => {
+  assert.match(cssText, /\.brand:hover \.brand-mark/, "brand 卡牌 hover 摆正");
+  assert.match(cssText, /launcher-in/, "启动窗要有淡入动画");
+  assert.ok(cssBlock(cssText, ".secondary-button:active"), "secondary-button 需要 active 态");
+  assert.ok(cssBlock(cssText, ".text-button:active"), "text-button 需要 active 态");
 });
 
 let failed = 0;

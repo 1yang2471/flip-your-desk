@@ -6,6 +6,8 @@
 const MUTE_KEY = "fyd.muted";
 const MASTER_VOLUME = 0.8;
 const MIN_INTERVAL_MS = 40;
+/** 各声部专用节流：发牌级联逐卡触发，间隔必须小于通用值。 */
+const MIN_INTERVALS: Record<string, number> = { deal: 14 };
 
 /** 启动窗与覆盖层共享同一个静音偏好。 */
 export function storedMuted(): boolean {
@@ -76,11 +78,12 @@ export class Sounds {
     }
   }
 
-  /** 同类音效节流：快速连点时不叠加成一团。 */
+  /** 同类音效节流：快速连点时不叠加成一团；deal 有更短的专用间隔。 */
   private allowed(kind: string): boolean {
     const now = performance.now();
     const last = this.lastPlayed.get(kind) ?? -Infinity;
-    if (now - last < MIN_INTERVAL_MS) return false;
+    const minInterval = MIN_INTERVALS[kind] ?? MIN_INTERVAL_MS;
+    if (now - last < minInterval) return false;
     this.lastPlayed.set(kind, now);
     return true;
   }
@@ -119,7 +122,13 @@ export class Sounds {
     oscillator.stop(start + duration + 0.02);
   }
 
-  private noise(duration: number, gainValue: number, frequency: number): void {
+  private noise(
+    duration: number,
+    gainValue: number,
+    frequency: number,
+    type: BiquadFilterType = "bandpass",
+    endFrequency?: number,
+  ): void {
     const context = this.ensure();
     const output = this.output();
     if (!context || !output) return;
@@ -132,8 +141,14 @@ export class Sounds {
     const source = context.createBufferSource();
     source.buffer = buffer;
     const filter = context.createBiquadFilter();
-    filter.type = "bandpass";
-    filter.frequency.value = frequency;
+    filter.type = type;
+    filter.frequency.setValueAtTime(frequency, context.currentTime);
+    if (endFrequency !== undefined) {
+      filter.frequency.exponentialRampToValueAtTime(
+        Math.max(40, endFrequency),
+        context.currentTime + duration,
+      );
+    }
     filter.Q.value = 0.8;
     const gain = context.createGain();
     gain.gain.value = gainValue;
@@ -141,21 +156,38 @@ export class Sounds {
     source.start();
   }
 
+  /** ±4% 随机音高倍率：连续操作时去掉打字机式的机械重复感。 */
+  private humanize(): number {
+    return 1 + (Math.random() * 2 - 1) * 0.04;
+  }
+
   flip(): void {
     if (!this.allowed("flip")) return;
-    this.noise(0.07, 0.06, 1600);
-    this.tone(420, 0.09, 0.035, "triangle", 0, 240);
+    const h = this.humanize();
+    // 纸牌翻动：高频噪声瞬态（弹指）+ 短促下滑三角波。
+    this.noise(0.05, 0.05, 4200, "highpass");
+    this.tone(430 * h, 0.08, 0.03, "triangle", 0, 230 * h);
   }
 
   pickup(): void {
     if (!this.allowed("pickup")) return;
-    this.tone(280, 0.05, 0.035, "sine", 0, 340);
+    const h = this.humanize();
+    // 纸面摩擦：带通噪声中心频率上扫，像把牌从桌面拿起。
+    this.noise(0.06, 0.032, 700 * h, "bandpass", 2200 * h);
   }
 
   drop(): void {
     if (!this.allowed("drop")) return;
-    this.tone(190, 0.07, 0.045, "sine", 0, 150);
-    this.noise(0.028, 0.025, 900);
+    const h = this.humanize();
+    // 落卡：低频冲击（牌身拍在桌面）+ lowpass 呢面摩擦尾。
+    this.tone(175 * h, 0.06, 0.05, "sine", 0, 118 * h);
+    this.noise(0.12, 0.018, 520, "lowpass");
+  }
+
+  /** 发牌级联的逐卡 tick：极轻的高频瞬态，与入场动画同步。 */
+  dealTick(): void {
+    if (!this.allowed("deal")) return;
+    this.noise(0.014, 0.028, 6000, "highpass");
   }
 
   /** 结算和弦：正确率 ≥50 / ≥20 / 其余 三档，音符 C5 E5 G5 C6 及其小调变体。 */

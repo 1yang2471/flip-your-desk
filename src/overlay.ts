@@ -32,6 +32,10 @@ interface DragState {
   slotY: number;
   armed: boolean;
   hoverSlot: number | null;
+  /** 上一事件的指针 x：算水平速度做微倾斜。 */
+  lastClientX: number;
+  /** 平滑后的倾斜角（度），±3 clamp。 */
+  tilt: number;
 }
 
 export class OverlayGame {
@@ -72,6 +76,8 @@ export class OverlayGame {
   private resultOpen = false;
   private exitOpen = false;
   private toastTimer: number | null = null;
+  /** 发牌级联的逐卡 tick 定时器，窗口销毁时统一清理。 */
+  private dealTimers: number[] = [];
 
   constructor(view: OverlayView, root: HTMLElement) {
     this.view = view;
@@ -223,9 +229,25 @@ export class OverlayGame {
   }
 
   private buildBoard(): void {
-    for (const slot of this.view.slots) {
-      this.ensureBack(slot);
+    // 发牌级联：按 y→x 排序逐卡延迟入场，像发牌员摆牌；只作用于首建路径。
+    // 游戏中途 applyState 调 ensureBack（重新盖回）时不带延迟——那是普通事件，
+    // 卡背凭空"迟到"一拍反而像 bug。
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      for (const slot of this.view.slots) this.ensureBack(slot);
+      return;
     }
+    const ordered = [...this.view.slots].sort((a, b) => a.y - b.y || a.x - b.x);
+    ordered.forEach((slot, index) => {
+      this.ensureBack(slot);
+      const delay = Math.min(index * 16, 560);
+      const inner = this.backs.get(slot.id)?.querySelector<HTMLElement>(".card-back-inner");
+      if (inner) inner.style.animation = `card-in 220ms var(--ease) ${delay}ms backwards`;
+      if (this.view.isPrimary) {
+        this.dealTimers.push(
+          window.setTimeout(() => this.sounds.dealTick(), delay + 200),
+        );
+      }
+    });
   }
 
   // --------------------------------------------------------------- events
@@ -249,6 +271,8 @@ export class OverlayGame {
   destroy(): void {
     if (this.clockTimer !== null) window.clearInterval(this.clockTimer);
     if (this.toastTimer !== null) window.clearTimeout(this.toastTimer);
+    for (const timer of this.dealTimers) window.clearTimeout(timer);
+    this.dealTimers = [];
     for (const unlisten of this.unlisteners) unlisten();
     this.unlisteners = [];
     document.removeEventListener("keydown", this.onKeyDownBound);
@@ -400,7 +424,6 @@ export class OverlayGame {
       element.dataset.tone = slot.tone;
       const inner = h("span", "card-inner card-back-inner");
       inner.appendChild(h("span", "card-back-mark", "?"));
-      inner.appendChild(h("span", "card-back-dot"));
       element.appendChild(inner);
       element.setAttribute("aria-label", t(this.lang, "overlay.cardBackAria"));
       element.addEventListener("click", () => this.onBackClick(slot.id));
@@ -501,11 +524,13 @@ export class OverlayGame {
       this.dropInto(slotId);
       return;
     }
+    const element = this.backs.get(slotId);
     void api.drawCard(slotId).catch((error) => {
       const payload = asAppError(error);
       console.error("draw failed", payload);
       this.toast(errorText(this.lang, payload.code));
       this.sounds.error();
+      if (element) this.shake(element);
     });
   }
 
@@ -554,6 +579,8 @@ export class OverlayGame {
       slotY: slot.y,
       armed: false,
       hoverSlot: null,
+      lastClientX: event.clientX,
+      tilt: 0,
     };
     this.bindDragListeners();
   }
@@ -599,7 +626,15 @@ export class OverlayGame {
     }
     event.preventDefault();
     drag.element.style.transition = "none";
-    drag.element.style.transform = `translate3d(${drag.slotX + dx}px, ${drag.slotY + dy}px, 0)`;
+    // 速度平滑出的微倾斜（±3°）：纸牌被拖动时随速度轻微甩尾；
+    // reduced-motion 用户保持纯平移。
+    const rawTilt = Math.max(-3, Math.min(3, (event.clientX - drag.lastClientX) * 0.6));
+    drag.tilt = drag.tilt * 0.8 + rawTilt * 0.2;
+    const tilt = window.matchMedia("(prefers-reduced-motion: reduce)").matches
+      ? 0
+      : drag.tilt;
+    drag.element.style.transform =
+      `translate3d(${drag.slotX + dx}px, ${drag.slotY + dy}px, 0) rotate(${tilt.toFixed(2)}deg)`;
 
     const point = this.globalPoint(event.clientX, event.clientY);
     const target = this.hitTest(point.x, point.y);
@@ -652,12 +687,14 @@ export class OverlayGame {
       drag.element.style.transform = `translate3d(${targetSlot.x}px, ${targetSlot.y}px, 0)`;
     }
     this.sounds.drop();
+    this.settle(drag.element);
     void api.moveCard(drag.fromSlot, target).catch((error) => {
       const payload = asAppError(error);
       console.error("move failed", payload);
       this.toast(errorText(this.lang, payload.code));
       this.sounds.error();
       drag.element.style.transform = back;
+      this.shake(drag.element);
     });
   }
 
@@ -740,6 +777,7 @@ export class OverlayGame {
       return;
     }
     this.sounds.drop();
+    const element = this.selectedIcon !== null ? this.faces.get(this.selectedIcon) : null;
     void api
       .moveCard(from, to)
       .catch((error) => {
@@ -747,6 +785,7 @@ export class OverlayGame {
         console.error("move failed", payload);
         this.toast(errorText(this.lang, payload.code));
         this.sounds.error();
+        if (element) this.shake(element);
       });
     this.clearSelection();
   }
@@ -759,16 +798,52 @@ export class OverlayGame {
       return;
     }
     this.sounds.drop();
+    const element = this.selectedIcon !== null ? this.faces.get(this.selectedIcon) : null;
     void api.moveCard(from, slotId).catch((error) => {
       const payload = asAppError(error);
       console.error("move failed", payload);
       this.toast(errorText(this.lang, payload.code));
       this.sounds.error();
+      if (element) this.shake(element);
     });
     this.clearSelection();
   }
 
   // ------------------------------------------------------- reveal effects
+
+  /**
+   * 错误反馈：涉事卡左右抖动 400ms。必须用 WAAPI 叠加合成（composite:"add"）：
+   * 替换式 CSS 动画会整体顶掉 animation 属性，face 的 rotateY(180→0) 基线
+   * 靠翻转动画 forwards 撑住，被顶掉就隐身；叠加合成无此问题。
+   */
+  private shake(element: HTMLElement): void {
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    element.animate(
+      [
+        { transform: "translateX(0)" },
+        { transform: "translateX(-4px)" },
+        { transform: "translateX(4px)" },
+        { transform: "translateX(-3px)" },
+        { transform: "translateX(3px)" },
+        { transform: "translateX(-1px)" },
+        { transform: "translateX(0)" },
+      ],
+      { duration: 400, easing: "ease-out", composite: "add" },
+    );
+  }
+
+  /** 落卡受压回弹：120ms 轻压（scale 1→0.97→1），叠加合成，不碰位置 transform。 */
+  private settle(element: HTMLElement): void {
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    element.animate(
+      [
+        { transform: "scale(1)" },
+        { transform: "scale(0.97)" },
+        { transform: "scale(1)" },
+      ],
+      { duration: 120, easing: "ease-out", composite: "add" },
+    );
+  }
 
   private animateCountUp(element: HTMLElement, target: number): void {
     if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
