@@ -260,6 +260,14 @@ test("HUD 与模态层在穿透的根容器里仍可交互", () => {
   assert.match(toast, /pointer-events:\s*none/, "toast 只是提示，不该拦截桌面点击");
 });
 
+test("选中/拖放金框画在格内，不与相邻卡片重叠", () => {
+  const css = readFileSync(join(ROOT, "src/styles.css"), "utf8");
+  const block = (css.match(/\.card\.is-drop-target[^{]*\{[^}]*\}/s) ?? [""])[0];
+  assert.match(block, /outline-offset:\s*-2px/, "金框必须内缩，外描边会和邻卡压在一起");
+  assert.doesNotMatch(block, /outline-offset:\s*[1-9]/, "不能再向外偏移");
+  assert.match(block, /border-radius:\s*12px/, "内描边圆角要与卡面一致");
+});
+
 let failed = 0;
 try {
   await start();

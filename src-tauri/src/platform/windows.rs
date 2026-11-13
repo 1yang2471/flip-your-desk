@@ -845,7 +845,6 @@ fn extract_cell(
     origin: RECT,
     cell: RectI,
     label_width: i32,
-    label_center_x: Option<i32>,
 ) -> CellExtract {
     let mut result = CellExtract {
         image: None,
@@ -898,25 +897,9 @@ fn extract_cell(
 
     // 尾部短带是桌面标签（一行文字一个带，最多两行）；全部剔除，只留图标带。
     let (icon_area, label_area) = split_bands(&bands, cell_h);
-    if let Some((label_start, label_end)) = label_area {
-        let (mut min_x, mut max_x) = (usize::MAX, 0usize);
-        for yy in label_start..=label_end {
-            for xx in 0..cell_w {
-                if diff_at(with_icons, clean, left + xx as u32, top + yy as u32)
-                    > icon_cutout::INFLUENCE_THRESHOLD
-                {
-                    min_x = min_x.min(xx);
-                    max_x = max_x.max(xx);
-                }
-            }
-        }
-        let center_x = label_center_x.unwrap_or_else(|| {
-            if min_x == usize::MAX {
-                (cell_w / 2) as i32
-            } else {
-                ((min_x + max_x) / 2) as i32
-            }
-        });
+    if let Some((label_start, _label_end)) = label_area {
+        // 用户设定：名字在卡内水平居中（不再跟随桌面偏左的图标中心）。
+        let center_x = (cell_w / 2) as i32;
         result.label = Some(LabelBox {
             top: label_start as i32,
             center_x,
@@ -943,9 +926,12 @@ fn extract_cell(
         return result;
     };
 
+    // 用户设定：图标在卡内水平居中（桌面布局偏左来自 Explorer，不再照搬）。
+    let icon_w = cut.image.width();
+    let offset_x = (cell_w as u32).saturating_sub(icon_w) / 2;
     let mut canvas = RgbaImage::new(cell_w as u32, cell_h as u32);
     for (px, py, pixel) in cut.image.enumerate_pixels() {
-        let dx = cut.origin_x + px;
+        let dx = offset_x + px;
         let dy = icon_top as u32 + cut.origin_y + py;
         if (dx as usize) < cell_w && (dy as usize) < cell_h {
             canvas.put_pixel(dx, dy, *pixel);
@@ -1130,15 +1116,7 @@ pub fn capture(monitors: &[MonitorInfo]) -> AppResult<Captured> {
             let label_width = label_rect
                 .map(|rect| rect.right - rect.left)
                 .unwrap_or(cell.w);
-            let label_center_x = label_rect.map(|rect| (rect.left + rect.right) / 2 - cell.x);
-            let extract = extract_cell(
-                &with_icons,
-                &clean,
-                origin,
-                cell,
-                label_width,
-                label_center_x,
-            );
+            let extract = extract_cell(&with_icons, &clean, origin, cell, label_width);
             IconRecord {
                 id: slot as u32,
                 name: item.name.clone(),
@@ -1347,6 +1325,60 @@ mod tests {
         assert_eq!(label, Some((50, 78)));
     }
 
+    /// 造一张 76×100 的格子：黑壁纸上一个偏左的色块图标。
+    fn scene_offscreen_icon() -> (RgbaImage, RgbaImage) {
+        let (w, h) = (76u32, 100u32);
+        let mut clean = RgbaImage::new(w, h);
+        let mut with = RgbaImage::new(w, h);
+        for y in 0..h {
+            for x in 0..w {
+                clean.put_pixel(x, y, image::Rgba([0, 0, 0, 255]));
+                with.put_pixel(x, y, image::Rgba([0, 0, 0, 255]));
+            }
+        }
+        // 桌面真实布局：图标落在格内 x=3..43（偏左），高 48 行。
+        for y in 4..52u32 {
+            for x in 3..43u32 {
+                with.put_pixel(x, y, image::Rgba([90, 160, 220, 255]));
+            }
+        }
+        (with, clean)
+    }
+
+    #[test]
+    fn icon_is_horizontally_centered_in_cell() {
+        // 用户设定：翻出的图标在卡内水平居中，不再照搬桌面的偏左布局。
+        let (with, clean) = scene_offscreen_icon();
+        let origin = RECT {
+            left: 0,
+            top: 0,
+            right: 76,
+            bottom: 100,
+        };
+        let cell = RectI {
+            x: 0,
+            y: 0,
+            w: 76,
+            h: 100,
+        };
+        let extract = extract_cell(&with, &clean, origin, cell, 76);
+        let image = extract.image.expect("cutout");
+        let mut min_x = u32::MAX;
+        let mut max_x = 0u32;
+        for (x, y, pixel) in image.enumerate_pixels() {
+            if pixel[3] > 128 {
+                min_x = min_x.min(x);
+                max_x = max_x.max(x);
+                let _ = y;
+            }
+        }
+        let center = (min_x as f32 + max_x as f32) / 2.0;
+        assert!(
+            (center - 38.0).abs() <= 2.0,
+            "icon center should be near cell center 38, got {center}"
+        );
+    }
+
     #[test]
     fn split_bands_keeps_lone_icon_band() {
         let (icon, label) = split_bands(&[(0, 47)], 100);
@@ -1459,15 +1491,7 @@ mod tests {
             let label_width = label_rect
                 .map(|rect| rect.right - rect.left)
                 .unwrap_or(cell.w);
-            let label_center_x = label_rect.map(|rect| (rect.left + rect.right) / 2 - cell.x);
-            let extract = extract_cell(
-                &with_icons,
-                &clean,
-                origin,
-                cell,
-                label_width,
-                label_center_x,
-            );
+            let extract = extract_cell(&with_icons, &clean, origin, cell, label_width);
             if let Some(image) = &extract.image {
                 let _ = image.save(dir.join(format!("extract-{index:02}.png")));
             }

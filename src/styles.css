@@ -792,11 +792,18 @@ button {
     0 0 12px rgba(230, 180, 91, 0.35);
 }
 
-/* outline 画在 .card 上（与整格命中区重合），不再依赖卡背的 3px 内缩。 */
+/* 选中/拖放金框画在格内（负 offset）：外描边会越出格子，与相邻卡片压在一起。 */
 .card.is-drop-target,
 .card.is-selected {
   outline: 2px solid var(--accent);
-  outline-offset: 2px;
+  outline-offset: -2px;
+  border-radius: 12px;
+}
+
+/* 选中态只保留金框：隐掉卡面各自的淡白描边/内发光，避免双层边框。 */
+.card.is-drop-target .card-face-inner.is-photo::after,
+.card.is-selected .card-face-inner.is-photo::after {
+  opacity: 0;
 }
 
 @keyframes card-in {
