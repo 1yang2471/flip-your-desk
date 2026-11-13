@@ -980,6 +980,34 @@ export class OverlayGame {
       panel.appendChild(h("p", "modal-note", t(this.lang, "result.saveNote")));
     }
 
+    // 复制结果：demo 与真实模式都提供；分享行走 i18n 模板，moves 用复数机制。
+    const copy = h("button", "text-button");
+    copy.type = "button";
+    copy.appendChild(h("span", "", t(this.lang, "result.copy")));
+    copy.addEventListener("click", () => {
+      const line = t(this.lang, "result.shareLine", {
+        total: result.total,
+        accuracy: result.accuracy,
+        time: formatDuration(result.elapsedMs),
+        moves: tDynamic(this.lang, pluralKey("result.moves", result.moves), { n: result.moves }),
+      });
+      void navigator.clipboard.writeText(line).then(() => {
+        this.toast(t(this.lang, "result.copied"));
+      }).catch(() => {
+        // WebView2 拒绝剪贴板 API 时退回 execCommand 兜底。
+        const area = document.createElement("textarea");
+        area.value = line;
+        area.style.position = "fixed";
+        area.style.opacity = "0";
+        document.body.appendChild(area);
+        area.select();
+        const ok = document.execCommand("copy");
+        area.remove();
+        this.toast(t(this.lang, ok ? "result.copied" : "result.copyFailed"));
+      });
+    });
+    actions.appendChild(copy);
+
     this.resultLayer.appendChild(panel);
     this.resultLayer.hidden = false;
     const focusTarget = panel.querySelector<HTMLElement>("button");

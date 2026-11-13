@@ -78,6 +78,10 @@ export const enUS = {
   "result.saveNote": "Saving moves your desktop icons to this round's layout.",
   "result.demoNote": "Demo mode never reads or writes your real desktop.",
   "result.quitDemo": "Quit demo",
+  "result.copy": "Copy result",
+  "result.copied": "Copied to clipboard",
+  "result.copyFailed": "Copy failed — take a screenshot instead",
+  "result.shareLine": "Flip Your Desk — {total} icons — {accuracy}% accuracy — {time} — {moves}",
 
   "exit.title": "End this round?",
   "exit.body": "Your desktop stays as it is. This round will not be saved.",

@@ -76,6 +76,10 @@ export const zhCN = {
   "result.saveNote": "保存后桌面图标会移动到本局的位置。",
   "result.demoNote": "演示模式不会读写真实桌面。",
   "result.quitDemo": "退出演示",
+  "result.copy": "复制结果",
+  "result.copied": "已复制到剪贴板",
+  "result.copyFailed": "复制失败，请手动截图分享",
+  "result.shareLine": "Flip Your Desk｜{total} 张图标｜正确率 {accuracy}%｜用时 {time}｜{moves}",
 
   "exit.title": "结束本局？",
   "exit.body": "退出后桌面保持原样，本局进度不会保存。",

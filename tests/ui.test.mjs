@@ -486,6 +486,40 @@ test("启动窗微打磨：brand 卡牌 hover 摆正、窗口淡入、次级按�
   assert.ok(cssBlock(cssText, ".text-button:active"), "text-button 需要 active 态");
 });
 
+// ---------------------------------------------------------- P1 模糊对焦 + P3 复制结算
+
+test("卡背静止态无实时模糊（CSSOM 实测）", async () => {
+  const info = await fresh(`(() => ({
+    blur: getComputedStyle(document.querySelector('.card-back-inner')).backdropFilter,
+  }))()`);
+  assert.equal(info.blur, "none",
+    "静止卡背 computed backdrop-filter 必须为 none——数十层实时模糊是发牌/拖拽掉帧主因");
+});
+
+test("卡背模糊只在被触碰时对焦：hover/拖拽规则带 blur，.card-inner 过渡包含 backdrop-filter", () => {
+  assert.match(cssText, /\.card-back:hover \.card-back-inner[^{]*\{[^}]*backdrop-filter/,
+    "hover 单卡升级 blur（拿起才对焦）");
+  assert.match(cssText, /\.card-back\.is-dragging \.card-back-inner[^{]*\{[^}]*backdrop-filter/,
+    "拖拽单卡升级 blur");
+  assert.match(cssText, /transition:[^{}]*backdrop-filter/,
+    "blur 切换要有过渡（命名属性，不得 transition:all）");
+});
+
+test("复制结算：剪贴板优先 navigator.clipboard，失败退回 execCommand，文案全走 i18n", () => {
+  const source = readFileSync(join(ROOT, "src/overlay.ts"), "utf8");
+  const show = source.slice(source.indexOf("private showResult"), source.indexOf("private showBusy"));
+  assert.match(show, /navigator\.clipboard\.writeText/, "优先 navigator.clipboard");
+  assert.match(show, /execCommand\("copy"\)/, "WebView2 拒绝时退回 execCommand 兜底");
+  assert.match(show, /result\.copy/, "按钮文案走 i18n");
+  assert.match(show, /result\.shareLine/, "分享行走 i18n 模板");
+  const zh = readFileSync(join(ROOT, "src/locales/zh-CN.ts"), "utf8");
+  const en = readFileSync(join(ROOT, "src/locales/en-US.ts"), "utf8");
+  for (const key of ["result.copy", "result.copied", "result.copyFailed", "result.shareLine"]) {
+    assert.ok(zh.includes(`"${key}"`), `zh 缺 ${key}`);
+    assert.ok(en.includes(`"${key}"`), `en 缺 ${key}`);
+  }
+});
+
 let failed = 0;
 try {
   await start();

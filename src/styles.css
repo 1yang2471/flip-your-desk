@@ -17,9 +17,9 @@
   --ok: #7fc79b;
   --warn: #e0b062;
   --bad: #e08a8a;
-  --card-dark: rgba(18, 20, 24, 0.9);
+  --card-dark: rgba(18, 20, 24, 0.93);
   --card-dark-border: rgba(255, 255, 255, 0.16);
-  --card-light: rgba(246, 242, 232, 0.95);
+  --card-light: rgba(246, 242, 232, 0.97);
   --card-light-border: rgba(28, 26, 22, 0.16);
   --hairline: rgba(255, 255, 255, 0.08);
   --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
@@ -602,7 +602,7 @@ button {
   border-radius: 12px;
   pointer-events: none;
   transition: transform 160ms var(--ease), box-shadow 160ms var(--ease),
-    outline-color 140ms var(--ease);
+    outline-color 140ms var(--ease), backdrop-filter 160ms var(--ease);
 }
 
 .card-back-inner {
@@ -610,6 +610,13 @@ button {
   background: var(--card-dark);
   border: 1px solid var(--card-dark-border);
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.28);
+}
+
+/* 模糊只在卡被触碰时启用：静止卡背用纯半透明色，桌面 40-60 张卡
+   全挂实时模糊是发牌/拖拽掉帧的主因；hover/拖拽中的单卡升级 blur
+   ——「拿起才对焦」，也顺手成为实体隐喻的一部分。 */
+.card-back:hover .card-back-inner,
+.card-back.is-dragging .card-back-inner {
   backdrop-filter: blur(10px) saturate(0.9);
 }
 
