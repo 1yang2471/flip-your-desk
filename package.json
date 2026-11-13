@@ -10,7 +10,8 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "check": "tsc --noEmit",
-    "test": "node tests/ui.test.mjs"
+    "test": "node tests/ui.test.mjs",
+    "exe": "scripts\\run-tauri-build.cmd"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.0.0"

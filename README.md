@@ -70,6 +70,7 @@
 npm install
 npm run tauri dev      # 开发运行（会启动本地 Vite 服务 127.0.0.1:1420）
 npm run tauri build    # 生成安装包（输出在 src-tauri/target/release/bundle）
+npm run exe            # 一键重编正式 exe（=run-tauri-build.cmd：加载 MSVC 环境 + 前端构建 + tauri build）
 ```
 
 > **不要用 `cargo build --release` 交付。** 它只编 Rust 二进制，不会把前端 `dist/`
