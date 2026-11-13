@@ -67,6 +67,8 @@ export class OverlayGame {
   private selectedSlot: number | null = null;
   private targetSlot: number | null = null;
   private pending = false;
+  /** armed 拖拽刚结束的短窗口内为 true：挡住 pointerup 派发的 click，避免二次换位。 */
+  private suppressClick = false;
   private resultOpen = false;
   private exitOpen = false;
   private toastTimer: number | null = null;
@@ -328,8 +330,15 @@ export class OverlayGame {
       }
     }
 
-    if (this.selectedIcon !== null && !iconSlot.has(this.selectedIcon)) {
-      this.clearSelection();
+    if (this.selectedIcon !== null) {
+      // 选中态跟随图标的新槽位：换位（自己被拖走/别卡换进来）后，
+      // 旧 selectedSlot 已过期，再点第三张卡会用它发起错误交换。
+      const current = iconSlot.get(this.selectedIcon);
+      if (current === undefined) {
+        this.clearSelection();
+      } else if (current !== this.selectedSlot) {
+        this.selectedSlot = current;
+      }
     }
 
     this.updateHud();
@@ -487,7 +496,7 @@ export class OverlayGame {
   // --------------------------------------------------------------- input
 
   private onBackClick(slotId: number): void {
-    if (this.state.finished || this.pending) return;
+    if (this.state.finished || this.pending || this.suppressClick) return;
     if (this.selectedIcon !== null) {
       this.dropInto(slotId);
       return;
@@ -501,7 +510,7 @@ export class OverlayGame {
   }
 
   private onFaceClick(iconId: number, slotId: number): void {
-    if (this.state.finished || this.pending) return;
+    if (this.state.finished || this.pending || this.suppressClick) return;
     if (this.selectedIcon !== null && this.selectedIcon !== iconId) {
       // 只设置落点：selectedSlot 必须保留“被选中那张牌”的槽位，
       // 否则 from === to，交换会被当成原地点击而静默取消。
@@ -523,8 +532,12 @@ export class OverlayGame {
     element: HTMLButtonElement,
   ): void {
     if (this.state.finished || this.pending) return;
+    if (this.drag) return;
     if (event.button !== 0) return;
     event.preventDefault();
+    // 新手势开始即解除 click 抑制：旧手势的 click 在 pointerup 后立刻派发，
+    // 不会迟于人类的下一次按下；比纯时间窗更稳（不依赖 200ms 够不够）。
+    this.suppressClick = false;
     try {
       element.setPointerCapture(event.pointerId);
     } catch {
@@ -557,7 +570,7 @@ export class OverlayGame {
     this.dragListeners = { move, end, cancel };
     window.addEventListener("pointermove", move, true);
     window.addEventListener("pointerup", end, true);
-    window.addEventListener("pointercancel", end, true);
+    window.addEventListener("pointercancel", cancel, true);
     window.addEventListener("blur", cancel);
     window.addEventListener("lostpointercapture", cancel, true);
   }
@@ -603,6 +616,8 @@ export class OverlayGame {
     this.drag = null;
     drag.element.classList.remove("is-dragging");
     drag.element.style.transition = "";
+    // 悬停高亮是玩家对落点的唯一预期：松手先清掉残留金框。
+    this.applyHover(null);
     try {
       drag.element.releasePointerCapture(drag.pointerId);
     } catch {
@@ -615,18 +630,23 @@ export class OverlayGame {
       drag.element.style.transform = back;
       return;
     }
+    // armed 拖拽刚结束：浏览器还会派发一次 click。不抑制的话，click 会
+    // 再走 onFaceClick → commitSelection，把第三张卡卷进同一次手势。
+    this.suppressClick = true;
+    const suppressTimer = window.setTimeout(() => {
+      this.suppressClick = false;
+    }, 200);
     // 中断（失焦/捕获丢失）或落在空白/原处：弹回原位，绝不悬停。
-    if (!event) {
-      drag.element.style.transform = back;
-      return;
-    }
-    const point = this.globalPoint(event.clientX, event.clientY);
-    const target = this.hitTest(point.x, point.y);
+    // 落点与悬停高亮同源：玩家看到哪格高亮，松手就换哪格。重新 hitTest
+    // 用的是松手瞬间的新坐标，边界上高亮 B、落点却变成 C，看起来就像
+    // 一次拖拽同时改了三张卡。
+    const target = event ? drag.hoverSlot : null;
     if (target === null || target === drag.fromSlot) {
       drag.element.style.transform = back;
+      window.clearTimeout(suppressTimer);
+      this.suppressClick = false;
       return;
     }
-    // 落到别的卡位：与那里换位。
     const targetSlot = this.slots.get(target);
     if (targetSlot) {
       drag.element.style.transform = `translate3d(${targetSlot.x}px, ${targetSlot.y}px, 0)`;

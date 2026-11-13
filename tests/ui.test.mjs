@@ -268,6 +268,57 @@ test("选中/拖放金框画在格内，不与相邻卡片重叠", () => {
   assert.match(block, /border-radius:\s*12px/, "内描边圆角要与卡面一致");
 });
 
+test("拖拽落点与悬停高亮同源：finishDrag 不再重新 hitTest", () => {
+  const source = readFileSync(join(ROOT, "src/overlay.ts"), "utf8");
+  const finish = source.slice(source.indexOf("private finishDrag"), source.indexOf("private globalPoint"));
+  assert.doesNotMatch(finish, /this\.hitTest\(/, "松手必须沿用 hoverSlot（所见即所得），不能二次 hitTest");
+  assert.match(finish, /drag\.hoverSlot/, "落点必须来自悬停高亮槽位");
+});
+
+test("拖拽结束后清除悬停高亮，不留金框", () => {
+  const source = readFileSync(join(ROOT, "src/overlay.ts"), "utf8");
+  const finish = source.slice(source.indexOf("private finishDrag"), source.indexOf("private globalPoint"));
+  assert.match(finish, /applyHover\(null\)/, "松手后必须清掉 is-drop-target 残留");
+});
+
+test("拖拽后的 click 被抑制，不会触发第二次换位", () => {
+  const source = readFileSync(join(ROOT, "src/overlay.ts"), "utf8");
+  const finish = source.slice(source.indexOf("private finishDrag"), source.indexOf("private globalPoint"));
+  assert.match(finish, /suppressClick/, "armed 拖拽结束后必须抑制随后的 click");
+  const click = source.slice(source.indexOf("private onFaceClick"));
+  assert.match(click, /suppressClick/, "onFaceClick 入口必须检查抑制标志");
+});
+
+test("换位后选中态跟随图标的新槽位，不用过期槽位发起交换", () => {
+  const source = readFileSync(join(ROOT, "src/overlay.ts"), "utf8");
+  const apply = source.slice(source.indexOf("private applyState"));
+  assert.match(
+    apply,
+    /iconSlot\.get\(this\.selectedIcon\)/,
+    "applyState 必须把 selectedSlot 同步到被选图标当前所在槽位",
+  );
+});
+
+test("pointercancel 走中断弹回，不提交换位", () => {
+  const source = readFileSync(join(ROOT, "src/overlay.ts"), "utf8");
+  const bind = source.slice(
+    source.indexOf("private bindDragListeners"),
+    source.indexOf("private unbindDragListeners"),
+  );
+  assert.match(bind, /addEventListener\("pointercancel", cancel/, "系统取消必须按中断处理");
+  assert.doesNotMatch(bind, /addEventListener\("pointercancel", end/, "不得带事件提交换位");
+});
+
+test("新手势开始时复位 click 抑制，并拒绝并发拖拽", () => {
+  const source = readFileSync(join(ROOT, "src/overlay.ts"), "utf8");
+  const down = source.slice(
+    source.indexOf("private onPointerDown"),
+    source.indexOf("private bindDragListeners"),
+  );
+  assert.match(down, /this\.suppressClick = false/, "pointerdown 必须复位 suppressClick");
+  assert.match(down, /if \(this\.drag\) return/, "已有拖拽时必须拒绝第二个 pointerdown");
+});
+
 let failed = 0;
 try {
   await start();
