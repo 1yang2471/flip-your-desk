@@ -53,10 +53,13 @@ export async function initLauncher(root: HTMLElement): Promise<void> {
     },
     toggleMute: () => {
       state.muted = !state.muted;
-      void api.setMuted(state.muted).catch((error) => {
-        console.error("mute failed", asAppError(error));
-        state.muted = !state.muted;
-      });
+      void api
+        .setMuted(state.muted)
+        .catch((error) => {
+          console.error("mute failed", asAppError(error));
+          state.muted = !state.muted;
+        })
+        .finally(render);
       render();
     },
     minimize: () => {
@@ -275,6 +278,14 @@ function renderLauncher(
       issues.appendChild(issue);
     }
     panel.appendChild(issues);
+  }
+
+  if (env && env.probeError) {
+    // 探测失败时 icon_count 不可信，直接展示真实错误码文案。
+    const error = h("div", "inline-error");
+    error.appendChild(iconEl("alert", 14));
+    error.appendChild(h("span", "", errorText(lang, env.probeError)));
+    panel.appendChild(error);
   }
 
   if (state.error) {

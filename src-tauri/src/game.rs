@@ -2,12 +2,11 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use rand::seq::SliceRandom;
 use rand::{thread_rng, Rng};
-use serde::{Deserialize, Serialize};
 
 use crate::error::{AppError, AppResult};
 use crate::geometry;
 use crate::model::{
-    GlobalSlotView, IconRecord, IconView, MonitorInfo, OverlayView, PublicState, RectI,
+    GlobalSlotView, IconRecord, IconView, IconWrite, MonitorInfo, OverlayView, PublicState, RectI,
     RoundResult, Snapshot, Tone,
 };
 
@@ -88,10 +87,11 @@ impl Round {
         if self.placements[from].is_none() {
             return Err(AppError::new("empty_slot"));
         }
+        // 拖回原位不是一步：只在真正交换时计数。
         if from != to {
             self.placements.swap(from, to);
+            self.moves += 1;
         }
-        self.moves += 1;
         Ok(())
     }
 
@@ -202,8 +202,9 @@ impl Round {
         })
     }
 
-    /// 保存新布局：图标 placed[slot] 应移动到 slot 原本所在的物理位置。
-    pub fn new_layout_positions(&self) -> AppResult<Vec<(u32, i32, i32)>> {
+    /// 保存新布局：placed[slot] 的图标应移动到 slot 原本所在的物理位置。
+    /// 目标以图标名为身份写回，玩到一半图标增删/改名也不会写错对象。
+    pub fn new_layout_positions(&self) -> AppResult<Vec<IconWrite>> {
         if self.result.is_none() {
             return Err(AppError::new("round_not_finished"));
         }
@@ -213,17 +214,26 @@ impl Round {
                 return Err(AppError::new("not_all_placed"));
             };
             let cell = self.snapshot.icons[slot].cell;
-            positions.push((*icon_id, cell.x, cell.y));
+            let icon = &self.snapshot.icons[*icon_id as usize];
+            positions.push(IconWrite {
+                name: icon.name.clone(),
+                x: cell.x,
+                y: cell.y,
+            });
         }
         Ok(positions)
     }
 
     /// 恢复原布局：每个图标回到自己的原始单元格。
-    pub fn original_positions(&self) -> Vec<(u32, i32, i32)> {
+    pub fn original_positions(&self) -> Vec<IconWrite> {
         self.snapshot
             .icons
             .iter()
-            .map(|icon| (icon.id, icon.cell.x, icon.cell.y))
+            .map(|icon| IconWrite {
+                name: icon.name.clone(),
+                x: icon.cell.x,
+                y: icon.cell.y,
+            })
             .collect()
     }
 
@@ -237,47 +247,6 @@ fn now_ms() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_millis() as u64)
         .unwrap_or(0)
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct LayoutBackup {
-    pub version: u32,
-    pub saved_at_ms: u64,
-    pub icons: Vec<BackupIcon>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct BackupIcon {
-    pub index: u32,
-    pub name: String,
-    pub x: i32,
-    pub y: i32,
-    pub w: i32,
-    pub h: i32,
-}
-
-impl LayoutBackup {
-    pub fn from_round(round: &Round) -> Self {
-        Self {
-            version: 1,
-            saved_at_ms: now_ms(),
-            icons: round
-                .snapshot
-                .icons
-                .iter()
-                .map(|icon| BackupIcon {
-                    index: icon.id,
-                    name: icon.name.clone(),
-                    x: icon.cell.x,
-                    y: icon.cell.y,
-                    w: icon.cell.w,
-                    h: icon.cell.h,
-                })
-                .collect(),
-        }
-    }
 }
 
 /// 仅用于开发调试：在本机屏幕上生成 12 张假牌，不触碰真实桌面。
@@ -304,7 +273,6 @@ pub fn mock_snapshot(monitors: &[MonitorInfo]) -> Snapshot {
         return Snapshot {
             icons: Vec::new(),
             monitors: monitors.to_vec(),
-            fingerprint: "mock-empty".into(),
         };
     };
     let icons = names
@@ -331,7 +299,6 @@ pub fn mock_snapshot(monitors: &[MonitorInfo]) -> Snapshot {
     Snapshot {
         icons,
         monitors: monitors.to_vec(),
-        fingerprint: "mock".into(),
     }
 }
 
@@ -428,19 +395,29 @@ mod tests {
         round.move_card(0, 1).unwrap();
         round.finish().unwrap();
         let positions = round.new_layout_positions().unwrap();
-        let icon0 = positions.iter().find(|(id, _, _)| *id == 0).unwrap();
         let slot1 = round.snapshot.icons[1].cell;
-        assert_eq!((icon0.1, icon0.2), (slot1.x, slot1.y));
+        let icon0 = positions
+            .iter()
+            .find(|write| write.name == round.snapshot.icons[0].name)
+            .unwrap();
+        assert_eq!((icon0.x, icon0.y), (slot1.x, slot1.y));
     }
 
     #[test]
-    fn backup_serializes_icon_cells() {
+    fn positions_carry_icon_names() {
         let round = test_round();
-        let backup = LayoutBackup::from_round(&round);
-        let json = serde_json::to_string(&backup).unwrap();
-        assert!(json.contains("\"icons\""));
-        let parsed: LayoutBackup = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed.icons.len(), round.total());
-        assert_eq!(parsed.icons[0].index, 0);
+        let original = round.original_positions();
+        let icon0 = &round.snapshot.icons[0];
+        assert_eq!(original[0].name, icon0.name);
+        assert_eq!((original[0].x, original[0].y), (icon0.cell.x, icon0.cell.y));
+    }
+
+    #[test]
+    fn move_to_same_slot_does_not_count() {
+        let mut round = test_round();
+        round.placements = (0..round.total()).map(|i| Some(i as u32)).collect();
+        round.pool.clear();
+        round.move_card(2, 2).unwrap();
+        assert_eq!(round.moves, 0);
     }
 }

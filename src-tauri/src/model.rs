@@ -70,7 +70,15 @@ pub struct IconRecord {
 pub struct Snapshot {
     pub icons: Vec<IconRecord>,
     pub monitors: Vec<MonitorInfo>,
-    pub fingerprint: String,
+}
+
+/// 写回桌面的目标：以图标名为身份（玩到一半图标增删/改名都不会写错对象），
+/// 位置为该图标应落到的屏幕物理坐标。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IconWrite {
+    pub name: String,
+    pub x: i32,
+    pub y: i32,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -81,9 +89,10 @@ pub struct EnvReport {
     pub auto_arrange: bool,
     pub icons_visible: bool,
     pub desktop_found: bool,
+    /// 探测阶段就失败时的原始错误码；此时 icon_count 等字段不可信。
+    pub probe_error: Option<String>,
     pub monitors: Vec<MonitorInfo>,
     pub muted: bool,
-    pub mock: bool,
     /// 稳定的问题码，前端负责本地化文案。
     pub issues: Vec<String>,
 }

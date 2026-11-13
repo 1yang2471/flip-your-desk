@@ -17,9 +17,9 @@ export interface EnvReport {
   autoArrange: boolean;
   iconsVisible: boolean;
   desktopFound: boolean;
+  probeError: string | null;
   monitors: MonitorInfo[];
   muted: boolean;
-  mock: boolean;
   issues: string[];
 }
 

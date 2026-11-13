@@ -64,6 +64,7 @@ export class OverlayGame {
   private pending = false;
   private resultOpen = false;
   private exitOpen = false;
+  private toastTimer: number | null = null;
 
   constructor(view: OverlayView, root: HTMLElement) {
     this.view = view;
@@ -80,7 +81,6 @@ export class OverlayGame {
     this.buildBoard();
     this.applyState(this.state, true);
     this.bindEvents();
-    window.setInterval(() => this.updateClock(), 250);
   }
 
   // ---------------------------------------------------------------- shell
@@ -96,7 +96,7 @@ export class OverlayGame {
 
     this.board = h("div", "board");
     this.board.setAttribute("role", "group");
-    this.board.setAttribute("aria-label", t(this.lang, "overlay.cardBackAria"));
+    this.board.setAttribute("aria-label", t(this.lang, "overlay.boardAria"));
     this.root.appendChild(this.board);
 
     this.toastElement = h("div", "toast");
@@ -241,6 +241,10 @@ export class OverlayGame {
     }
     if (event.key === "Escape") {
       event.preventDefault();
+      if (this.resultOpen) {
+        // 结算弹窗必须由用户明确选择，Esc 不叠加退出确认。
+        return;
+      }
       if (this.exitOpen) {
         this.hideExitConfirm();
       } else if (this.selectedIcon !== null) {
@@ -452,7 +456,8 @@ export class OverlayGame {
   private onFaceClick(iconId: number, slotId: number): void {
     if (this.state.finished || this.pending) return;
     if (this.selectedIcon !== null && this.selectedIcon !== iconId) {
-      this.selectedSlot = slotId;
+      // 只设置落点：selectedSlot 必须保留“被选中那张牌”的槽位，
+      // 否则 from === to，交换会被当成原地点击而静默取消。
       this.targetSlot = slotId;
       this.commitSelection();
       return;
@@ -704,7 +709,8 @@ export class OverlayGame {
       })),
     );
     panel.appendChild(figure);
-    this.sounds.finish(result.accuracy);
+    // 只在主屏播放结算音，多显示器时避免和弦叠放。
+    if (this.view.isPrimary) this.sounds.finish(result.accuracy);
     this.animateCountUp(digit, result.accuracy);
 
     const stats = h("div", "result-stats");
@@ -832,7 +838,10 @@ export class OverlayGame {
       quit.type = "button";
       quit.appendChild(h("span", "", t(this.lang, "result.quit")));
       quit.addEventListener("click", () => {
-        void api.quitApp();
+        void api.quitApp().catch((error) => {
+          // 写回途中拒绝退出：提示用户等待，而不是留下半残桌面。
+          this.toast(errorText(this.lang, asAppError(error).code));
+        });
       });
       busyEl.appendChild(quit);
     }
@@ -931,7 +940,9 @@ export class OverlayGame {
   private toast(message: string): void {
     this.toastElement.textContent = message;
     this.toastElement.hidden = false;
-    window.setTimeout(() => {
+    if (this.toastTimer !== null) window.clearTimeout(this.toastTimer);
+    this.toastTimer = window.setTimeout(() => {
+      this.toastTimer = null;
       this.toastElement.hidden = true;
     }, 2600);
   }
