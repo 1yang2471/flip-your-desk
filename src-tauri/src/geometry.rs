@@ -1,18 +1,18 @@
 use crate::model::{IconRecord, MonitorInfo, RectI, SlotView};
 
-/// 牌面在单元格内收缩的 CSS 像素，留出壁纸缝隙。
-pub const CARD_INSET: f64 = 3.0;
-
-pub fn card_rect_css(cell: RectI, monitor: &MonitorInfo, inset: f64) -> (f64, f64, f64, f64) {
+/// 单元格 → 覆盖层 CSS 像素矩形。
+/// 必须覆盖整格：透明卡面的图标按格内原始像素位置摆放，任何收缩都会造成错位。
+/// 视觉上牌面的 3px 缝隙由背面卡自己在 CSS 里收缩。
+pub fn card_rect_css(cell: RectI, monitor: &MonitorInfo) -> (f64, f64, f64, f64) {
     let scale = if monitor.scale > 0.0 {
         monitor.scale
     } else {
         1.0
     };
-    let x = (cell.x - monitor.x) as f64 / scale + inset;
-    let y = (cell.y - monitor.y) as f64 / scale + inset;
-    let w = (cell.w as f64 / scale - inset * 2.0).max(24.0);
-    let h = (cell.h as f64 / scale - inset * 2.0).max(24.0);
+    let x = (cell.x - monitor.x) as f64 / scale;
+    let y = (cell.y - monitor.y) as f64 / scale;
+    let w = (cell.w as f64 / scale).max(24.0);
+    let h = (cell.h as f64 / scale).max(24.0);
     (x, y, w, h)
 }
 
@@ -48,7 +48,7 @@ pub fn slot_views(
         .iter()
         .filter(|icon| icon.monitor == monitor_index)
         .map(|icon| {
-            let (x, y, w, h) = card_rect_css(icon.cell, monitor, CARD_INSET);
+            let (x, y, w, h) = card_rect_css(icon.cell, monitor);
             SlotView {
                 id: icon.id,
                 x,
@@ -104,7 +104,7 @@ mod tests {
     }
 
     #[test]
-    fn card_rect_insets_by_css_pixels() {
+    fn card_rect_covers_whole_cell() {
         let (x, y, w, h) = card_rect_css(
             RectI {
                 x: 14,
@@ -113,12 +113,11 @@ mod tests {
                 h: 100,
             },
             &monitor(),
-            CARD_INSET,
         );
-        assert!((x - 17.0).abs() < 1e-6);
-        assert!((y - 5.0).abs() < 1e-6);
-        assert!((w - 70.0).abs() < 1e-6);
-        assert!((h - 94.0).abs() < 1e-6);
+        assert!((x - 14.0).abs() < 1e-6);
+        assert!((y - 2.0).abs() < 1e-6);
+        assert!((w - 76.0).abs() < 1e-6);
+        assert!((h - 100.0).abs() < 1e-6);
     }
 
     #[test]
@@ -133,12 +132,11 @@ mod tests {
                 h: 150,
             },
             &monitor,
-            CARD_INSET,
         );
-        assert!((x - 17.0).abs() < 1e-6);
-        assert!((y - 5.0).abs() < 1e-6);
-        assert!((w - 70.0).abs() < 1e-6);
-        assert!((h - 94.0).abs() < 1e-6);
+        assert!((x - 14.0).abs() < 1e-6);
+        assert!((y - 2.0).abs() < 1e-6);
+        assert!((w - 76.0).abs() < 1e-6);
+        assert!((h - 100.0).abs() < 1e-6);
     }
 
     #[test]
@@ -161,10 +159,9 @@ mod tests {
                 h: 100,
             },
             &monitor,
-            CARD_INSET,
         );
-        assert!((x - 23.0).abs() < 1e-6);
-        assert!((y - 13.0).abs() < 1e-6);
+        assert!((x - 20.0).abs() < 1e-6);
+        assert!((y - 10.0).abs() < 1e-6);
     }
 
     #[test]

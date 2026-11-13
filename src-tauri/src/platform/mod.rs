@@ -1,4 +1,4 @@
-use crate::model::IconRecord;
+use crate::model::{IconRecord, LabelFont};
 
 pub struct ProbeData {
     pub icon_count: usize,
@@ -14,6 +14,7 @@ pub struct ProbeData {
 
 pub struct Captured {
     pub icons: Vec<IconRecord>,
+    pub label_font: LabelFont,
 }
 
 /// 写回结果：moved 为成功写回的图标数，skipped_missing 为桌面已找不到的目标名

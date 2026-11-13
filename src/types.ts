@@ -23,11 +23,29 @@ export interface EnvReport {
   issues: string[];
 }
 
+/** 桌面标签的几何（CSS 像素，相对单元格）。 */
+export interface IconLabel {
+  top: number;
+  centerX: number;
+  /** 桌面标签矩形宽度（CSS 像素）。 */
+  width: number;
+}
+
 export interface IconView {
   id: number;
   name: string;
+  /** 单元格尺寸的全格 RGBA 画布；空字符串表示没有可用图标图。 */
   image: string;
   originalMonitor: number;
+  /** 桌面标签几何；null 表示没检测到标签。 */
+  label: IconLabel | null;
+}
+
+/** 桌面图标标签字体。 */
+export interface LabelFont {
+  family: string;
+  sizePx: number;
+  weight: number;
 }
 
 export interface SlotView {
@@ -80,6 +98,7 @@ export interface OverlayView {
   state: PublicState;
   total: number;
   mock: boolean;
+  labelFont: LabelFont;
 }
 
 export interface DragHover {

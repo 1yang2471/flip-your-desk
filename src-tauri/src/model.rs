@@ -57,12 +57,25 @@ pub enum Tone {
 pub struct IconRecord {
     pub id: u32,
     pub name: String,
-    /// PNG data URL；空字符串表示没有可用的图标图，由前端画字母占位。
+    /// 单元格尺寸的 RGBA PNG（物理像素）；图标贴在其格内原始位置，其余透明。
     pub image: String,
     /// 该图标原始单元格的屏幕物理像素矩形。
     pub cell: RectI,
     pub monitor: usize,
+    /// 卡背色调（按壁纸亮度）。
     pub tone: Tone,
+    /// 桌面标签的几何（相对单元格的物理像素）；None = 没检测到标签。
+    pub label: Option<LabelBox>,
+}
+
+/// 桌面图标标签的几何：文字首行像素带顶边与水平中心。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LabelBox {
+    pub top: i32,
+    pub center_x: i32,
+    /// 桌面标签矩形的宽度（物理像素），可大于格宽：Explorer 允许文字溢出。
+    pub width: i32,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -70,6 +83,27 @@ pub struct IconRecord {
 pub struct Snapshot {
     pub icons: Vec<IconRecord>,
     pub monitors: Vec<MonitorInfo>,
+    /// 桌面图标标签的字体（开局时从系统读取，整局固定）。
+    pub label_font: LabelFont,
+}
+
+/// 桌面图标标签字体：字族 + 逻辑像素字号 + 字重。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LabelFont {
+    pub family: String,
+    pub size_px: f64,
+    pub weight: i32,
+}
+
+impl Default for LabelFont {
+    fn default() -> Self {
+        Self {
+            family: "Segoe UI".into(),
+            size_px: 12.0,
+            weight: 400,
+        }
+    }
 }
 
 /// 写回桌面的目标：以图标名为身份（玩到一半图标增删/改名都不会写错对象），
@@ -144,6 +178,16 @@ pub struct IconView {
     pub name: String,
     pub image: String,
     pub original_monitor: usize,
+    /// 桌面标签几何（CSS 像素，相对单元格）。
+    pub label: Option<LabelView>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LabelView {
+    pub top: f64,
+    pub center_x: f64,
+    pub width: f64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -168,6 +212,8 @@ pub struct OverlayView {
     pub state: PublicState,
     pub total: usize,
     pub mock: bool,
+    /// 桌面标签字体（卡面名字按它渲染）。
+    pub label_font: LabelFont,
 }
 
 #[derive(Debug, Clone, Serialize)]

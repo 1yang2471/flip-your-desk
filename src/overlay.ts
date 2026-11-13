@@ -32,8 +32,6 @@ interface DragState {
   hoverSlot: number | null;
 }
 
-const CARD_MIN_ICON = 22;
-
 export class OverlayGame {
   private readonly view: OverlayView;
   private readonly root: HTMLElement;
@@ -389,21 +387,25 @@ export class OverlayGame {
       element.type = "button";
       element.dataset.icon = String(icon.id);
       element.dataset.slot = String(slotId);
-      element.dataset.tone = slot.tone;
       const inner = h("span", "card-inner card-face-inner");
-      const iconBox = h("span", "card-icon");
       if (icon.image) {
-        const image = h("img", "card-icon-image");
+        // 透明卡面：全格画布已把图标摆回格内原位，名字按桌面标签排版，
+        // 于是翻转后的样子与真实桌面 1:1（尺寸/颜色/位置/字体）。
+        inner.classList.add("is-photo");
+        const image = h("img", "face-image");
         image.src = icon.image;
         image.alt = "";
-        iconBox.appendChild(image);
+        inner.appendChild(image);
+        inner.appendChild(this.buildFaceName(icon));
       } else {
+        // 无图（演示模式或抠图失败）：退回实体卡面 + 字母占位。
+        const iconBox = h("span", "card-icon");
         iconBox.appendChild(
           h("span", "card-icon-letter", Array.from(icon.name || "?")[0] ?? "?"),
         );
+        inner.appendChild(iconBox);
+        inner.appendChild(h("span", "card-name", icon.name));
       }
-      inner.appendChild(iconBox);
-      inner.appendChild(h("span", "card-name", icon.name));
       element.appendChild(inner);
       element.setAttribute("aria-label", t(this.lang, "overlay.cardFaceAria", { name: icon.name }));
       // 槽位必须每次从 dataset 现读：卡牌移动后被复用，闭包里的 slot 会过期。
@@ -431,14 +433,25 @@ export class OverlayGame {
     element.remove();
   }
 
+  /** 桌面标签样式的名字：字体/字号/颜色/位置都取真实桌面参数。 */
+  private buildFaceName(icon: IconView): HTMLElement {
+    const element = h("span", "face-name", icon.name);
+    const font = this.view.labelFont;
+    element.style.fontFamily = `"${font.family}", var(--font)`;
+    element.style.fontSize = `${font.sizePx}px`;
+    element.style.fontWeight = String(font.weight);
+    if (icon.label) {
+      element.style.top = `${icon.label.top}px`;
+      element.style.left = `${icon.label.centerX}px`;
+      // Explorer 的标签宽度可能大于格宽（长名字允许溢出到相邻格）。
+      element.style.width = `${icon.label.width}px`;
+    }
+    return element;
+  }
+
   private placeCard(element: HTMLElement, slot: SlotView): void {
-    const iconSize = Math.max(
-      CARD_MIN_ICON,
-      Math.min(slot.w * 0.58, slot.h * 0.44, 52),
-    );
     element.style.width = `${slot.w}px`;
     element.style.height = `${slot.h}px`;
-    element.style.setProperty("--icon-size", `${iconSize}px`);
     element.style.transform = `translate3d(${slot.x}px, ${slot.y}px, 0)`;
   }
 

@@ -6,8 +6,8 @@ use rand::{thread_rng, Rng};
 use crate::error::{AppError, AppResult};
 use crate::geometry;
 use crate::model::{
-    GlobalSlotView, IconRecord, IconView, IconWrite, MonitorInfo, OverlayView, PublicState, RectI,
-    RoundResult, Snapshot, Tone,
+    GlobalSlotView, IconRecord, IconView, IconWrite, LabelBox, LabelFont, LabelView, MonitorInfo,
+    OverlayView, PublicState, RectI, RoundResult, Snapshot, Tone,
 };
 
 #[derive(Debug, Clone)]
@@ -188,6 +188,27 @@ impl Round {
                 name: icon.name.clone(),
                 image: icon.image.clone(),
                 original_monitor: icon.monitor,
+                // 标签几何是物理像素；换成该图标所在显示器的 CSS 像素。
+                label: icon.label.map(|label| {
+                    let scale = self
+                        .snapshot
+                        .monitors
+                        .iter()
+                        .find(|monitor| monitor.index == icon.monitor)
+                        .map(|monitor| {
+                            if monitor.scale > 0.0 {
+                                monitor.scale
+                            } else {
+                                1.0
+                            }
+                        })
+                        .unwrap_or(1.0);
+                    LabelView {
+                        top: label.top as f64 / scale,
+                        center_x: label.center_x as f64 / scale,
+                        width: label.width as f64 / scale,
+                    }
+                }),
             })
             .collect::<Vec<_>>();
         Ok(OverlayView {
@@ -199,6 +220,7 @@ impl Round {
             total: self.total(),
             monitor,
             mock: self.mock,
+            label_font: self.snapshot.label_font.clone(),
         })
     }
 
@@ -273,6 +295,7 @@ pub fn mock_snapshot(monitors: &[MonitorInfo]) -> Snapshot {
         return Snapshot {
             icons: Vec::new(),
             monitors: monitors.to_vec(),
+            label_font: LabelFont::default(),
         };
     };
     let icons = names
@@ -293,12 +316,18 @@ pub fn mock_snapshot(monitors: &[MonitorInfo]) -> Snapshot {
                 },
                 monitor: primary.index,
                 tone: Tone::Light,
+                label: Some(LabelBox {
+                    top: 54,
+                    center_x: 38,
+                    width: 76,
+                }),
             }
         })
         .collect::<Vec<_>>();
     Snapshot {
         icons,
         monitors: monitors.to_vec(),
+        label_font: LabelFont::default(),
     }
 }
 

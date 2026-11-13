@@ -1,6 +1,7 @@
 mod error;
 mod game;
 mod geometry;
+mod icon_cutout;
 mod model;
 mod platform;
 
@@ -333,6 +334,7 @@ async fn start_round(
         Snapshot {
             icons: captured.icons,
             monitors: monitors.clone(),
+            label_font: captured.label_font,
         }
     };
 

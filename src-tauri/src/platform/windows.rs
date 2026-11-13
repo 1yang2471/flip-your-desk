@@ -22,14 +22,16 @@ use windows::Win32::System::Threading::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     FindWindowExW, FindWindowW, GetSystemMetrics, GetWindowLongW, GetWindowRect,
-    GetWindowThreadProcessId, IsWindowVisible, SendMessageTimeoutW, SetWindowPos, GWL_STYLE,
-    SMTO_ABORTIFHUNG, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN,
-    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+    GetWindowThreadProcessId, IsWindowVisible, SendMessageTimeoutW, SetWindowPos,
+    SystemParametersInfoW, GWL_STYLE, ICONMETRICSW, SMTO_ABORTIFHUNG, SM_CXVIRTUALSCREEN,
+    SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SPI_GETICONMETRICS, SWP_NOACTIVATE,
+    SWP_NOMOVE, SWP_NOSIZE, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
 };
 
 use crate::error::{AppError, AppResult};
 use crate::geometry;
-use crate::model::{IconRecord, IconWrite, MonitorInfo, RectI, Tone};
+use crate::icon_cutout;
+use crate::model::{IconRecord, IconWrite, LabelBox, LabelFont, MonitorInfo, RectI, Tone};
 
 use super::{ApplyReport, Captured, ProbeData};
 
@@ -42,6 +44,10 @@ const LVM_SETITEMPOSITION32: u32 = 0x1049;
 const LVM_GETITEMTEXTW: u32 = 0x1073;
 const LVM_GETITEMSPACING: u32 = 0x1033;
 const LVM_SETITEMSTATE: u32 = 0x102B;
+const LVM_GETITEMRECT: u32 = 0x100E;
+
+const LVIR_ICON: i32 = 1;
+const LVIR_LABEL: i32 = 2;
 
 const LVS_AUTOARRANGE: u32 = 0x0100;
 const LVIF_TEXT: u32 = 0x0001;
@@ -246,6 +252,47 @@ impl Desktop {
             ));
         }
         Ok(point)
+    }
+
+    /// 读取 item 的图标矩形或标签矩形（屏幕坐标）。
+    /// `kind` 取 LVIR_ICON / LVIR_LABEL（LVM_GETITEMRECT 约定先写入 RECT.left）。
+    fn item_rect(&self, index: usize, kind: i32) -> AppResult<Option<RECT>> {
+        let rect = RECT {
+            left: kind,
+            ..Default::default()
+        };
+        self.remote.write(0, &rect)?;
+        let ok = self.send(listview_msg(
+            LVM_GETITEMRECT,
+            index,
+            self.remote.ptr_at(0) as isize,
+        ))?;
+        if ok == 0 {
+            return Ok(None);
+        }
+        let rect: RECT = self.remote.read(0)?;
+        let mut top_left = POINT {
+            x: rect.left,
+            y: rect.top,
+        };
+        let mut bottom_right = POINT {
+            x: rect.right,
+            y: rect.bottom,
+        };
+        if !unsafe { ClientToScreen(self.listview, &mut top_left) }.as_bool()
+            || !unsafe { ClientToScreen(self.listview, &mut bottom_right) }.as_bool()
+        {
+            return Err(AppError::with_detail(
+                "desktop_read",
+                "ClientToScreen failed",
+            ));
+        }
+        Ok(Some(RECT {
+            left: top_left.x,
+            top: top_left.y,
+            right: bottom_right.x,
+            bottom: bottom_right.y,
+        }))
     }
 
     fn item_text(&self, index: usize) -> AppResult<String> {
@@ -673,6 +720,42 @@ fn encode_png_data_url(image: &RgbaImage) -> AppResult<String> {
     ))
 }
 
+/// 桌面图标标签的字体信息（SPI_GETICONMETRICS）。
+pub struct LabelFontInfo {
+    pub family: String,
+    /// 逻辑像素字号（取 |lfHeight|，96 DPI 单位）。
+    pub size_px: f64,
+    pub weight: i32,
+}
+
+fn icon_metrics() -> Option<LabelFontInfo> {
+    let mut metrics = ICONMETRICSW {
+        cbSize: std::mem::size_of::<ICONMETRICSW>() as u32,
+        ..Default::default()
+    };
+    unsafe {
+        SystemParametersInfoW(
+            SPI_GETICONMETRICS,
+            metrics.cbSize,
+            Some(&mut metrics as *mut _ as *mut core::ffi::c_void),
+            SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
+        )
+    }
+    .ok()?;
+    let face = &metrics.lfFont.lfFaceName;
+    let len = face.iter().position(|ch| *ch == 0).unwrap_or(face.len());
+    let family = String::from_utf16_lossy(&face[..len]);
+    Some(LabelFontInfo {
+        family: if family.is_empty() {
+            "Segoe UI".to_string()
+        } else {
+            family
+        },
+        size_px: metrics.lfFont.lfHeight.unsigned_abs() as f64,
+        weight: metrics.lfFont.lfWeight,
+    })
+}
+
 fn tone_for_cell(clean: &RgbaImage, origin: RECT, cell: RectI) -> Tone {
     let x = cell.x - origin.left;
     let y = cell.y - origin.top;
@@ -711,122 +794,173 @@ fn tone_for_cell(clean: &RgbaImage, origin: RECT, cell: RectI) -> Tone {
     }
 }
 
-fn extract_icon(
+/// 单格提取结果：全格画布 + 桌面标签几何。
+struct CellExtract {
+    /// 单元格尺寸的 RGBA 画布；None = 没提取到图标（前端画字母占位）。
+    image: Option<RgbaImage>,
+    label: Option<LabelBox>,
+}
+
+/// 桌面标签行带的最大高度占比（单行文字远小于图标本体）。
+const LABEL_BAND_MAX_RATIO: f32 = 0.25;
+/// 桌面标签行带的最小起始占比（标签位于图标下方）。
+const LABEL_BAND_MIN_TOP_RATIO: f32 = 0.45;
+
+/// 把行带切成「图标区域」与「尾部文字区域」。
+/// 文字行带判定：高度 ≤ 25% 格高且从 45% 格高以下开始；从底部往上连续剔除，
+/// 至少保留一个图标带（两行标签会产出两个文字带，必须全部剔除）。
+fn split_bands(
+    bands: &[(usize, usize)],
+    cell_h: usize,
+) -> (Option<(usize, usize)>, Option<(usize, usize)>) {
+    let max_label_h = ((cell_h as f32) * LABEL_BAND_MAX_RATIO).max(6.0) as usize;
+    let min_label_top = ((cell_h as f32) * LABEL_BAND_MIN_TOP_RATIO) as usize;
+    let mut remaining = bands;
+    let mut label_start: Option<usize> = None;
+    let mut label_end: Option<usize> = None;
+    while remaining.len() > 1 {
+        let (start, end) = remaining[remaining.len() - 1];
+        if end - start + 1 <= max_label_h && start >= min_label_top {
+            // 从下往上剥：bottom 记第一次（最下面一行），top 记最后一次（最上面一行）。
+            if label_end.is_none() {
+                label_end = Some(end);
+            }
+            label_start = Some(start);
+            remaining = &remaining[..remaining.len() - 1];
+        } else {
+            break;
+        }
+    }
+    let icon = remaining
+        .first()
+        .map(|first| (first.0, remaining[remaining.len() - 1].1));
+    let label = label_start.zip(label_end);
+    (icon, label)
+}
+
+fn extract_cell(
     with_icons: &RgbaImage,
     clean: &RgbaImage,
     origin: RECT,
     cell: RectI,
-) -> Option<String> {
+    label_width: i32,
+    label_center_x: Option<i32>,
+) -> CellExtract {
+    let mut result = CellExtract {
+        image: None,
+        label: None,
+    };
     let x = cell.x - origin.left;
     let y = cell.y - origin.top;
-    let w = cell.w;
-    let h = cell.h;
-    if w < 8 || h < 8 {
-        return None;
+    if cell.w < 8 || cell.h < 8 {
+        return result;
     }
     let left = x.max(0) as u32;
     let top = y.max(0) as u32;
-    let right = (x + w).min(with_icons.width() as i32).max(0) as u32;
-    let bottom = (y + h).min(with_icons.height() as i32).max(0) as u32;
+    let right = (x + cell.w).min(with_icons.width() as i32).max(0) as u32;
+    let bottom = (y + cell.h).min(with_icons.height() as i32).max(0) as u32;
     if right <= left || bottom <= top {
-        return None;
+        return result;
     }
 
     let cell_w = (right - left) as usize;
     let cell_h = (bottom - top) as usize;
-    let mut row_counts = vec![0u32; cell_h];
-    let mut diff = vec![0u8; cell_w * cell_h];
+    let mut row_has = vec![false; cell_h];
     for yy in 0..cell_h {
         for xx in 0..cell_w {
-            let a = with_icons.get_pixel(left + xx as u32, top + yy as u32);
-            let b = clean.get_pixel(left + xx as u32, top + yy as u32);
-            let d = (a[0] as i32 - b[0] as i32)
-                .abs()
-                .max((a[1] as i32 - b[1] as i32).abs())
-                .max((a[2] as i32 - b[2] as i32).abs());
-            let d = d.min(255) as u8;
-            diff[yy * cell_w + xx] = d;
-            if d > 8 {
-                row_counts[yy] += 1;
+            if diff_at(with_icons, clean, left + xx as u32, top + yy as u32)
+                > icon_cutout::INFLUENCE_THRESHOLD
+            {
+                row_has[yy] = true;
+                break;
             }
         }
     }
 
     let mut bands: Vec<(usize, usize)> = Vec::new();
     let mut start: Option<usize> = None;
-    for (row, count) in row_counts.iter().enumerate() {
-        if *count > 0 && start.is_none() {
+    for (row, has) in row_has.iter().enumerate() {
+        if *has && start.is_none() {
             start = Some(row);
-        } else if *count == 0 {
+        } else if !*has {
             if let Some(s) = start.take() {
-                bands.push((s, row.saturating_sub(1)));
+                bands.push((s, row - 1));
             }
         }
     }
     if let Some(s) = start {
-        bands.push((s, cell_h.saturating_sub(1)));
+        bands.push((s, cell_h - 1));
     }
     if bands.is_empty() {
-        return None;
+        return result;
     }
 
-    // 桌面图标标签是最后一个独立的行带；把它从前面的图标本体中排除。
-    let mut icon_bands = bands.clone();
-    if icon_bands.len() > 1 {
-        if let Some((last_start, last_end)) = icon_bands.last().copied() {
-            let last_h = last_end - last_start + 1;
-            if last_h <= ((cell_h as f32) * 0.28).max(6.0) as usize
-                && last_start as f32 > cell_h as f32 * 0.45
-            {
-                icon_bands.pop();
-            }
-        }
-    }
-    if icon_bands.is_empty() {
-        return None;
-    }
-
-    let mut min_y = usize::MAX;
-    let mut max_y = 0usize;
-    let mut min_x = usize::MAX;
-    let mut max_x = 0usize;
-    for (band_start, band_end) in &icon_bands {
-        for yy in *band_start..=*band_end {
+    // 尾部短带是桌面标签（一行文字一个带，最多两行）；全部剔除，只留图标带。
+    let (icon_area, label_area) = split_bands(&bands, cell_h);
+    if let Some((label_start, label_end)) = label_area {
+        let (mut min_x, mut max_x) = (usize::MAX, 0usize);
+        for yy in label_start..=label_end {
             for xx in 0..cell_w {
-                if diff[yy * cell_w + xx] > 8 {
+                if diff_at(with_icons, clean, left + xx as u32, top + yy as u32)
+                    > icon_cutout::INFLUENCE_THRESHOLD
+                {
                     min_x = min_x.min(xx);
                     max_x = max_x.max(xx);
-                    min_y = min_y.min(yy);
-                    max_y = max_y.max(yy);
                 }
             }
         }
-    }
-    if min_x == usize::MAX || max_x < min_x || max_y < min_y {
-        return None;
-    }
-    let icon_w = max_x - min_x + 1;
-    let icon_h = max_y - min_y + 1;
-    if icon_w < 4 || icon_h < 4 || (icon_w * icon_h) as f32 > (cell_w * cell_h) as f32 * 0.9 {
-        return None;
+        let center_x = label_center_x.unwrap_or_else(|| {
+            if min_x == usize::MAX {
+                (cell_w / 2) as i32
+            } else {
+                ((min_x + max_x) / 2) as i32
+            }
+        });
+        result.label = Some(LabelBox {
+            top: label_start as i32,
+            center_x,
+            width: label_width.max(cell.w),
+        });
     }
 
-    let mut icon = RgbaImage::new(icon_w as u32, icon_h as u32);
-    for yy in 0..icon_h {
-        for xx in 0..icon_w {
-            let src_x = left + (min_x + xx) as u32;
-            let src_y = top + (min_y + yy) as u32;
-            let a = with_icons.get_pixel(src_x, src_y);
-            let d = diff[(min_y + yy) * cell_w + min_x + xx];
-            let alpha = if d <= 3 {
-                0
-            } else {
-                ((d as u32 * 8).min(255)) as u8
-            };
-            icon.put_pixel(xx as u32, yy as u32, image::Rgba([a[0], a[1], a[2], alpha]));
+    let Some((icon_top, icon_bottom)) = icon_area else {
+        return result;
+    };
+
+    // 只对图标带区域做 alpha 提取；画布仍是整个单元格，保证位置/尺寸 1:1。
+    let area_top = top + icon_top as u32;
+    let area_bottom = (top + icon_bottom as u32 + 1).min(with_icons.height());
+    if area_bottom <= area_top {
+        return result;
+    }
+    let area_h = area_bottom - area_top;
+    let crop_with =
+        image::imageops::crop_imm(with_icons, left, area_top, cell_w as u32, area_h).to_image();
+    let crop_clean =
+        image::imageops::crop_imm(clean, left, area_top, cell_w as u32, area_h).to_image();
+    let Some(cut) = icon_cutout::cutout(&crop_with, &crop_clean) else {
+        return result;
+    };
+
+    let mut canvas = RgbaImage::new(cell_w as u32, cell_h as u32);
+    for (px, py, pixel) in cut.image.enumerate_pixels() {
+        let dx = cut.origin_x + px;
+        let dy = icon_top as u32 + cut.origin_y + py;
+        if (dx as usize) < cell_w && (dy as usize) < cell_h {
+            canvas.put_pixel(dx, dy, *pixel);
         }
     }
-    encode_png_data_url(&icon).ok()
+    result.image = Some(canvas);
+    result
+}
+
+fn diff_at(with_icons: &RgbaImage, clean: &RgbaImage, x: u32, y: u32) -> i32 {
+    let a = with_icons.get_pixel(x, y);
+    let b = clean.get_pixel(x, y);
+    (a[0] as i32 - b[0] as i32)
+        .abs()
+        .max((a[1] as i32 - b[1] as i32).abs())
+        .max((a[2] as i32 - b[2] as i32).abs())
 }
 
 pub fn probe() -> ProbeData {
@@ -970,6 +1104,14 @@ pub fn capture(monitors: &[MonitorInfo]) -> AppResult<Captured> {
 
     // id 必须是 0..len 连续：它同时是游戏槽位号（placements 按此索引），
     // 过滤掉屏外图标后不能再沿用原始 listview 索引。
+    let label_font = match icon_metrics() {
+        Some(font) => LabelFont {
+            family: font.family,
+            size_px: font.size_px,
+            weight: font.weight,
+        },
+        None => LabelFont::default(),
+    };
     let icons = items
         .iter()
         .enumerate()
@@ -981,19 +1123,38 @@ pub fn capture(monitors: &[MonitorInfo]) -> AppResult<Captured> {
                 h: spacing.1,
             };
             let monitor = geometry::monitor_for_cell(cell, monitors);
-            let image = extract_icon(&with_icons, &clean, origin, cell).unwrap_or_default();
+            // Explorer 的标签矩形是逻辑网格坐标，与自定义图标位置不一定同原点；
+            // 取它的宽度和中心相对 cell 的偏移，文字才会按桌面的方式居中/溢出。
+            let label_rect = desktop.item_rect(slot, LVIR_LABEL).ok().flatten();
+            let label_width = label_rect
+                .map(|rect| rect.right - rect.left)
+                .unwrap_or(cell.w);
+            let label_center_x = label_rect.map(|rect| (rect.left + rect.right) / 2 - cell.x);
+            let extract = extract_cell(
+                &with_icons,
+                &clean,
+                origin,
+                cell,
+                label_width,
+                label_center_x,
+            );
             IconRecord {
                 id: slot as u32,
                 name: item.name.clone(),
-                image,
+                image: extract
+                    .image
+                    .as_ref()
+                    .and_then(|image| encode_png_data_url(image).ok())
+                    .unwrap_or_default(),
                 cell,
                 monitor,
                 tone: tone_for_cell(&clean, origin, cell),
+                label: extract.label,
             }
         })
         .collect::<Vec<_>>();
 
-    Ok(Captured { icons })
+    Ok(Captured { icons, label_font })
 }
 
 pub fn apply_positions(positions: &[IconWrite]) -> AppResult<ApplyReport> {
@@ -1168,5 +1329,161 @@ mod tests {
         let ids: Vec<u32> = (0..kept.len()).map(|slot| slot as u32).collect();
         assert_eq!(ids, vec![0, 1]);
         assert!(ids.iter().all(|id| (*id as usize) < kept.len()));
+    }
+
+    fn rect_text(rect: Option<RECT>) -> String {
+        match rect {
+            Some(r) => format!("({},{})-({},{})", r.left, r.top, r.right, r.bottom),
+            None => "-".to_string(),
+        }
+    }
+
+    #[test]
+    fn split_bands_strips_two_line_label() {
+        // 图标 0..47，两行标签 50..63 / 65..78：两行都必须剔除。
+        let (icon, label) = split_bands(&[(0, 47), (50, 63), (65, 78)], 100);
+        assert_eq!(icon, Some((0, 47)));
+        assert_eq!(label, Some((50, 78)));
+    }
+
+    #[test]
+    fn split_bands_keeps_lone_icon_band() {
+        let (icon, label) = split_bands(&[(0, 47)], 100);
+        assert_eq!(icon, Some((0, 47)));
+        assert_eq!(label, None);
+    }
+
+    #[test]
+    fn split_bands_does_not_eat_tall_lower_band() {
+        // 高度超过 25% 格高的下带不是文字，仍属图标。
+        let (icon, label) = split_bands(&[(0, 47), (52, 90)], 100);
+        assert_eq!(icon, Some((0, 90)));
+        assert_eq!(label, None);
+    }
+
+    #[test]
+    fn split_bands_requires_label_below_icon_area() {
+        // 起始位置低于 45% 才可能是标签。
+        let (icon, label) = split_bands(&[(0, 20), (30, 40)], 100);
+        assert_eq!(icon, Some((0, 40)));
+        assert_eq!(label, None);
+    }
+
+    fn crop_cell(image: &RgbaImage, origin: RECT, cell: RectI) -> Option<RgbaImage> {
+        let x = cell.x - origin.left;
+        let y = cell.y - origin.top;
+        let left = x.max(0) as u32;
+        let top = y.max(0) as u32;
+        let right = (x + cell.w).min(image.width() as i32).max(0) as u32;
+        let bottom = (y + cell.h).min(image.height() as i32).max(0) as u32;
+        if right <= left || bottom <= top {
+            return None;
+        }
+        Some(image::imageops::crop_imm(image, left, top, right - left, bottom - top).to_image())
+    }
+
+    /// 真机诊断：dump 真实桌面的几何与标签数据，供人工核对。
+    /// 运行：cargo test dump_desktop_cells -- --ignored --nocapture
+    #[test]
+    #[ignore = "读取真实桌面并短暂隐藏图标，仅手动运行"]
+    fn dump_desktop_cells() {
+        let Ok(desktop) = Desktop::open() else {
+            eprintln!("desktop not available");
+            return;
+        };
+        if !desktop.icons_visible() || desktop.auto_arrange() {
+            eprintln!("icons hidden or auto-arrange on; abort");
+            return;
+        }
+        let (count, items, spacing) = desktop.read_items().expect("read items");
+        eprintln!("count={count} spacing=({}, {})", spacing.0, spacing.1);
+        match icon_metrics() {
+            Some(font) => eprintln!(
+                "label font: family={:?} size={}px weight={}",
+                font.family, font.size_px, font.weight
+            ),
+            None => eprintln!("label font: unavailable"),
+        }
+        for (index, item) in items.iter().enumerate() {
+            let icon = desktop.item_rect(index, LVIR_ICON).ok().flatten();
+            let label = desktop.item_rect(index, LVIR_LABEL).ok().flatten();
+            eprintln!(
+                "item {index}: {:?} pos=({},{}) icon_rect={} label_rect={}",
+                item.name,
+                item.x,
+                item.y,
+                rect_text(icon),
+                rect_text(label),
+            );
+        }
+
+        let (hwnd, origin) = capture_bounds(&desktop).expect("capture bounds");
+        let (with_icons, _) = capture_window(hwnd).expect("capture with icons");
+        let guard = VisibilityGuard::hide(&desktop).expect("hide icons");
+        let (clean, _) = capture_window(hwnd).expect("capture clean");
+        drop(guard);
+
+        let dir =
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../target/desktop-dump");
+        std::fs::create_dir_all(&dir).expect("create dump dir");
+        with_icons.save(dir.join("with.png")).expect("save with");
+        clean.save(dir.join("clean.png")).expect("save clean");
+
+        let font = icon_metrics();
+        let (font_family, font_size, font_weight) = match &font {
+            Some(f) => (f.family.clone(), f.size_px, f.weight),
+            None => ("Segoe UI".to_string(), 12.0, 400),
+        };
+        let scale = unsafe { windows::Win32::UI::HiDpi::GetDpiForSystem() } as f64 / 96.0;
+        let mut metrics = String::new();
+
+        for (index, item) in items.iter().enumerate() {
+            let cell = RectI {
+                x: item.x,
+                y: item.y,
+                w: spacing.0,
+                h: spacing.1,
+            };
+            let (Some(cell_with), Some(cell_clean)) = (
+                crop_cell(&with_icons, origin, cell),
+                crop_cell(&clean, origin, cell),
+            ) else {
+                continue;
+            };
+            if index < 8 {
+                let _ = cell_with.save(dir.join(format!("cell-{index:02}-with.png")));
+                let _ = cell_clean.save(dir.join(format!("cell-{index:02}-clean.png")));
+            }
+            let label_rect = desktop.item_rect(index, LVIR_LABEL).ok().flatten();
+            let label_width = label_rect
+                .map(|rect| rect.right - rect.left)
+                .unwrap_or(cell.w);
+            let label_center_x = label_rect.map(|rect| (rect.left + rect.right) / 2 - cell.x);
+            let extract = extract_cell(
+                &with_icons,
+                &clean,
+                origin,
+                cell,
+                label_width,
+                label_center_x,
+            );
+            if let Some(image) = &extract.image {
+                let _ = image.save(dir.join(format!("extract-{index:02}.png")));
+            }
+            let (label_top, label_center, label_width) = match extract.label {
+                Some(label) => (label.top, label.center_x, label.width),
+                None => (-1, -1, -1),
+            };
+            metrics.push_str(&format!(
+                "{index}\t{}\t{}\t{}\t{}\t{}\t{label_top}\t{label_center}\t{label_width}\t{font_family}\t{font_size}\t{font_weight}\t{scale}\n",
+                item.name.replace('\t', " "),
+                cell.x,
+                cell.y,
+                cell.w,
+                cell.h,
+            ));
+        }
+        std::fs::write(dir.join("metrics.txt"), metrics).expect("write metrics");
+        eprintln!("dump written to {}", dir.display());
     }
 }

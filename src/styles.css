@@ -72,7 +72,8 @@ button {
 /* ------------------------------------------------------------- launcher */
 
 .launcher-root {
-  padding: 16px;
+  /* 面板即窗口：不留透明边距，否则窗口四边会漏出一圈桌面（曾反馈为“透明边框”）。 */
+  padding: 0;
   height: 100%;
 }
 
@@ -535,6 +536,11 @@ button {
   outline-offset: 2px;
 }
 
+/* 槽位矩形就是整格（正面要 1:1 对位）；背面卡自己收缩 3px 留出壁纸缝。 */
+.card-back {
+  padding: 3px;
+}
+
 .card-inner {
   position: relative;
   display: flex;
@@ -590,17 +596,55 @@ button {
   box-shadow: 0 8px 22px rgba(0, 0, 0, 0.32);
 }
 
+/* 透明卡面：不画卡底，图标与名字直接浮在真实壁纸上。 */
+.card-face-inner.is-photo {
+  padding: 0;
+  gap: 0;
+  background: none;
+  border: 0;
+  box-shadow: none;
+}
+
+/* 全格画布按格尺寸整幅渲染：图标已在画布内的原始像素位置，不能再缩放。 */
+.face-image {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+/* 名字复刻桌面标签：白字 + 黑阴影，位置/字号由后端实测值内联指定。 */
+.face-name {
+  position: absolute;
+  top: 56%;
+  left: 50%;
+  /* 宽度由后端实测标签矩形内联指定；可大于格宽，长名字按桌面方式溢出。 */
+  width: 100%;
+  transform: translateX(-50%);
+  max-height: 2.6em;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.3;
+  text-align: center;
+  overflow-wrap: anywhere;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9), 0 0 1px rgba(0, 0, 0, 0.55);
+  pointer-events: none;
+}
+
 .card-icon {
   display: grid;
   place-items: center;
-  width: var(--icon-size, 40px);
-  height: var(--icon-size, 40px);
-}
-
-.card-icon-image {
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
+  width: 40px;
+  height: 40px;
 }
 
 .card-icon-letter {
@@ -611,7 +655,7 @@ button {
   border-radius: 10px;
   background: var(--ink-900);
   color: var(--accent);
-  font-size: calc(var(--icon-size, 40px) * 0.5);
+  font-size: 20px;
   font-weight: 600;
 }
 
@@ -629,7 +673,7 @@ button {
   -webkit-box-orient: vertical;
 }
 
-.card:hover .card-inner {
+.card-back:hover .card-inner {
   transform: translateY(-2px);
 }
 
@@ -640,6 +684,9 @@ button {
 
 .card.is-dragging .card-inner {
   transform: scale(1.06) rotate(1.5deg);
+}
+
+.card-back.is-dragging .card-inner {
   box-shadow: 0 18px 34px rgba(0, 0, 0, 0.42);
 }
 
