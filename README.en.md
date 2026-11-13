@@ -14,7 +14,11 @@ Flip every desktop icon face down, draw the real icons back at random, and put e
 
 ## Screenshots
 
-<!-- Screenshots will be added after the first release -->
+| Launcher | Board | Result |
+| --- | --- | --- |
+| ![Launcher](docs/screenshot-launcher.png) | ![Board](docs/screenshot-board.png) | ![Result](docs/screenshot-result.png) |
+
+![Gameplay demo](docs/demo.gif)
 
 ## Install
 
@@ -70,6 +74,7 @@ You need Node.js 20+, stable Rust, the Microsoft C++ Build Tools (with the Windo
 npm install
 npm run tauri dev      # development run (starts a local Vite server on 127.0.0.1:1420)
 npm run tauri build    # installers land in src-tauri/target/release/bundle
+npm run exe            # one-shot release exe (= run-tauri-build.cmd: loads MSVC env + frontend build + tauri build)
 ```
 
 > **Do not ship a `cargo build --release` binary.** It compiles the Rust part only and

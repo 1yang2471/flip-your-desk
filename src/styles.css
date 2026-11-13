@@ -100,10 +100,6 @@ button {
   }
 }
 
-.window-drag {
-  display: none;
-}
-
 .head-spacer {
   flex: 1;
   align-self: stretch;
