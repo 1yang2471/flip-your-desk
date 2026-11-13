@@ -7,7 +7,9 @@ import {
   detectLang,
   errorText,
   formatDuration,
+  isLang,
   pluralKey,
+  tDynamic,
   t,
   type Lang,
 } from "./i18n";
@@ -72,7 +74,8 @@ export class OverlayGame {
   constructor(view: OverlayView, root: HTMLElement) {
     this.view = view;
     this.root = root;
-    this.lang = view.state.locale === "en-US" ? "en-US" : detectLang();
+    // 开局时启动窗选定的语言是唯一真源；仅在异常缺失时回退到系统检测。
+    this.lang = isLang(view.state.locale) ? view.state.locale : detectLang();
     this.state = view.state;
     for (const slot of view.slots) this.slots.set(slot.id, slot);
     for (const icon of view.icons) this.icons.set(icon.id, icon);
@@ -84,6 +87,7 @@ export class OverlayGame {
     this.buildBoard();
     this.applyState(this.state, true);
     this.bindEvents();
+    window.addEventListener("beforeunload", () => this.destroy());
   }
 
   // ---------------------------------------------------------------- shell
@@ -104,6 +108,7 @@ export class OverlayGame {
 
     this.toastElement = h("div", "toast");
     this.toastElement.setAttribute("role", "status");
+    this.toastElement.setAttribute("aria-live", "polite");
     this.toastElement.hidden = true;
     this.root.appendChild(this.toastElement);
 
@@ -140,7 +145,7 @@ export class OverlayGame {
     moves.appendChild(iconEl("move", 12));
     this.hudMoves = h("span", "hud-value", "0");
     moves.appendChild(this.hudMoves);
-    moves.title = t(this.lang, pluralKey("overlay.moves", 0), { n: 0 });
+    moves.title = tDynamic(this.lang, pluralKey("overlay.moves", 0), { n: 0 });
     hud.appendChild(moves);
 
     const mute = h("button", "hud-button");
@@ -223,16 +228,28 @@ export class OverlayGame {
 
   // --------------------------------------------------------------- events
 
+  private clockTimer: number | null = null;
+  private unlisteners: Array<() => void> = [];
+  private readonly onKeyDownBound = (event: KeyboardEvent) => this.onKeyDown(event);
+
   private bindEvents(): void {
     void listen<PublicState>("state-changed", (event) => {
       this.applyState(event.payload, false);
-    });
-    void listen<{ slot: number | null }>("drag-hover", (event) => {
-      this.applyHover(event.payload.slot);
-    });
-    document.addEventListener("keydown", (event) => this.onKeyDown(event));
+    }).then((unlisten) => this.unlisteners.push(unlisten));
+    // drag-hover 由本窗口本地 applyHover 已足够；后端广播在多显示器下会与
+    // 本地状态交错，这里不再订阅，避免 outline 闪烁。
+    document.addEventListener("keydown", this.onKeyDownBound);
     // 计时器只在状态事件里刷新会冻结：加 1 秒心跳。
-    window.setInterval(() => this.updateClock(), 1000);
+    this.clockTimer = window.setInterval(() => this.updateClock(), 1000);
+  }
+
+  /** 覆盖窗关闭/重建时释放定时器与事件监听，避免多局叠加。 */
+  destroy(): void {
+    if (this.clockTimer !== null) window.clearInterval(this.clockTimer);
+    if (this.toastTimer !== null) window.clearTimeout(this.toastTimer);
+    for (const unlisten of this.unlisteners) unlisten();
+    this.unlisteners = [];
+    document.removeEventListener("keydown", this.onKeyDownBound);
   }
 
   private onKeyDown(event: KeyboardEvent): void {
@@ -288,14 +305,19 @@ export class OverlayGame {
       if (icon !== null && icon !== undefined) iconSlot.set(icon, slot);
     });
 
+    // 翻牌音与卡面创建的同一帧触发：drawCard 的 Promise 比 state-changed 晚，
+    // 在那里播会导致声音落后于画面。只有「新出现」的正面才响，拖动换位不响。
+    let newFace = false;
     for (const icon of this.view.icons) {
       const slotId = iconSlot.get(icon.id);
       if (slotId === undefined || !this.slots.has(slotId)) {
         this.dropFace(icon.id);
         continue;
       }
+      if (!this.faces.has(icon.id)) newFace = true;
       this.ensureFace(icon, this.slots.get(slotId)!, slotId);
     }
+    if (!initial && newFace && this.view.isPrimary) this.sounds.flip();
 
     for (const slot of this.view.slots) {
       const placed = state.placements[slot.id];
@@ -329,7 +351,7 @@ export class OverlayGame {
       total,
     });
     const percent = total > 0 ? (revealed / total) * 100 : 0;
-    this.hudProgressFill.style.width = `${percent}%`;
+    this.hudProgressFill.style.transform = `scaleX(${percent / 100})`;
     this.hudMoves.textContent = String(this.state.moves);
     this.updateClock();
     this.placeFloating();
@@ -347,8 +369,15 @@ export class OverlayGame {
 
   private updateConfirmButton(): void {
     const ready = this.state.remaining === 0 && !this.state.finished;
+    const appeared = ready && this.confirmButton.hidden;
     this.confirmButton.hidden = !ready;
-    if (ready) this.placeFloating();
+    if (appeared) {
+      // CSS 动画只在元素创建时跑一次；hidden→显示必须重播，否则用户看不到弹出。
+      this.confirmButton.style.animation = "none";
+      void this.confirmButton.offsetWidth;
+      this.confirmButton.style.animation = "";
+      this.placeFloating();
+    }
   }
 
   // ---------------------------------------------------------------- cards
@@ -417,7 +446,7 @@ export class OverlayGame {
         const current = this.slots.get(Number(element!.dataset.slot));
         if (current) this.onPointerDown(event, icon.id, current, element!);
       });
-      inner.style.animation = "card-flip-in 280ms cubic-bezier(0.2, 0.8, 0.2, 1)";
+      // 翻牌 3D 动画由 CSS 在元素创建时自动播放；拖动换位复用元素时不重播。
       this.board.appendChild(element);
       this.faces.set(icon.id, element);
     } else {
@@ -463,17 +492,12 @@ export class OverlayGame {
       this.dropInto(slotId);
       return;
     }
-    void api
-      .drawCard(slotId)
-      .then(() => {
-        this.sounds.flip();
-      })
-      .catch((error) => {
-        const payload = asAppError(error);
-        console.error("draw failed", payload);
-        this.toast(errorText(this.lang, payload.code));
-        this.sounds.error();
-      });
+    void api.drawCard(slotId).catch((error) => {
+      const payload = asAppError(error);
+      console.error("draw failed", payload);
+      this.toast(errorText(this.lang, payload.code));
+      this.sounds.error();
+    });
   }
 
   private onFaceClick(iconId: number, slotId: number): void {
@@ -569,7 +593,6 @@ export class OverlayGame {
     if (target !== drag.hoverSlot) {
       drag.hoverSlot = target;
       this.applyHover(target);
-      void api.setDragHover(target).catch(() => undefined);
     }
   }
 
@@ -585,7 +608,6 @@ export class OverlayGame {
     } catch {
       // 已经释放或从未捕获，忽略。
     }
-    void api.setDragHover(null).catch(() => undefined);
 
     const back = `translate3d(${drag.slotX}px, ${drag.slotY}px, 0)`;
     // 只是点击（没拖动）：立刻归位，把选中/交换交给 click 事件。
@@ -721,6 +743,7 @@ export class OverlayGame {
       const payload = asAppError(error);
       console.error("move failed", payload);
       this.toast(errorText(this.lang, payload.code));
+      this.sounds.error();
     });
     this.clearSelection();
   }
@@ -783,7 +806,7 @@ export class OverlayGame {
     const moveStat = h("span", "result-stat");
     moveStat.appendChild(iconEl("move", 13));
     moveStat.appendChild(
-      h("span", "", t(this.lang, pluralKey("result.moves", result.moves), { n: result.moves })),
+      h("span", "", tDynamic(this.lang, pluralKey("result.moves", result.moves), { n: result.moves })),
     );
     stats.appendChild(moveStat);
     panel.appendChild(stats);
@@ -1008,20 +1031,22 @@ export class OverlayGame {
   }
 }
 
-export function renderFatal(root: HTMLElement, message: string): void {
+export function renderFatal(root: HTMLElement, message: string, lang: Lang): void {
   clear(root);
-  root.classList.add("overlay-root", "is-fatal");
+  root.classList.add("overlay-root");
+  const layer = h("div", "modal-layer");
   const panel = h("div", "modal modal-compact");
-  panel.appendChild(h("p", "modal-title", "Flip Your Desk"));
+  panel.appendChild(h("p", "modal-title", t(lang, "app.name")));
   panel.appendChild(h("p", "modal-body", message));
   const actions = h("div", "modal-actions");
   const quit = h("button", "primary-button");
   quit.type = "button";
-  quit.appendChild(h("span", "", "Quit"));
+  quit.appendChild(h("span", "", t(lang, "result.quit")));
   quit.addEventListener("click", () => {
     void api.quitApp();
   });
   actions.appendChild(quit);
   panel.appendChild(actions);
-  root.appendChild(panel);
+  layer.appendChild(panel);
+  root.appendChild(layer);
 }

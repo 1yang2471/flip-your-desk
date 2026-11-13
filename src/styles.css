@@ -8,11 +8,11 @@
   --ink-500: #5c646f;
   --text-1: #f3f1ea;
   --text-2: #b7b2a7;
-  --text-3: #857f75;
+  --text-3: #a8a196;
   --paper: #f4f0e6;
   --paper-edge: #ddd6c6;
   --accent: #e6b45b;
-  --accent-deep: #c08f33;
+  --accent-deep: #8a6318;
   --accent-ink: #1d1405;
   --ok: #7fc79b;
   --warn: #e0b062;
@@ -428,7 +428,30 @@ button {
 }
 
 .primary-button:focus-visible {
-  outline-color: var(--accent-ink);
+  outline-color: var(--accent);
+}
+
+/* 视觉尺寸保持紧凑，但命中区统一扩到 44×44（项目自定可及性下限）。
+   用透明伪元素，不影响布局与外观。 */
+.icon-button,
+.hud-button,
+.confirm-button,
+.secondary-button {
+  position: relative;
+}
+
+.icon-button::before,
+.hud-button::before,
+.confirm-button::before,
+.secondary-button::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 44px;
+  height: 44px;
+  transform: translate(-50%, -50%);
+  pointer-events: auto;
 }
 
 .primary-button:active {
@@ -506,14 +529,20 @@ button {
   background-size: cover;
   background-position: center;
   user-select: none;
+  /* 只让卡片接事件；其余区域（卡牌间隙的真壁纸）必须能把点击还给桌面，
+     否则整局期间用户无法「边玩边干活」。 */
+  pointer-events: none;
 }
 
 .board {
   position: absolute;
   inset: 0;
+  pointer-events: none;
 }
 
+/* 卡片是唯一的交互面；card-inner 及其子层保持 none，事件落到 .card 上。 */
 .card {
+  pointer-events: auto;
   position: absolute;
   top: 0;
   left: 0;
@@ -536,18 +565,16 @@ button {
   outline-offset: 2px;
 }
 
-/* 槽位矩形就是整格（正面要 1:1 对位）；背面卡自己收缩 3px 留出壁纸缝。 */
-.card-back {
-  padding: 3px;
-}
-
+/* 正反两面共用整格盒模型：卡背与卡面的可见盒必须同为整格（用户设定）。
+   原来的 3px 壁纸缝用 padding 实现会压小背面，已废除；缝隙让位于同尺寸。 */
 .card-inner {
-  position: relative;
+  position: absolute;
+  inset: 0;
   display: flex;
   flex-direction: column;
   align-items: center;
-  width: 100%;
-  height: 100%;
+  width: auto;
+  height: auto;
   border-radius: 12px;
   pointer-events: none;
   transition: transform 160ms var(--ease), box-shadow 160ms var(--ease),
@@ -560,6 +587,41 @@ button {
   border: 1px solid var(--card-dark-border);
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.28);
   backdrop-filter: blur(10px) saturate(0.9);
+}
+
+/* 翻牌是真 3D：两面背向隐藏，各自绕 Y 轴转半圈交换可见性。
+   卡背 0°→-180° 转出，卡面 180°→0° 转入；元素创建即播放，
+   无需额外 JS 状态类（overlay.ts 创建 face 时动画随之启动）。 */
+.card-back,
+.card-face {
+  perspective: 700px;
+}
+
+.card-back-inner,
+.card-face-inner {
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+  transform-style: preserve-3d;
+}
+
+.card-face-inner {
+  transform: rotateY(180deg);
+  animation: card-flip-3d-in 280ms cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
+}
+
+.card-back-inner {
+  transform: rotateY(0deg);
+}
+
+@keyframes card-flip-3d-in {
+  from {
+    transform: rotateY(180deg);
+    opacity: 0;
+  }
+  to {
+    transform: rotateY(0deg);
+    opacity: 1;
+  }
 }
 
 .card[data-tone="light"] .card-back-inner {
@@ -596,13 +658,42 @@ button {
   box-shadow: 0 8px 22px rgba(0, 0, 0, 0.32);
 }
 
-/* 透明卡面：不画卡底，图标与名字直接浮在真实壁纸上。 */
+/* 透明卡面：不画卡底，图标与名字直接浮在真实壁纸上。
+   但必须留下「这是一张卡」的线索：用不占布局的伪元素画一圈极淡的
+   内发光描边 + 右下角小金点，绝不覆盖图标/名字的像素位置。 */
 .card-face-inner.is-photo {
   padding: 0;
   gap: 0;
   background: none;
   border: 0;
   box-shadow: none;
+}
+
+.card-face-inner.is-photo::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-radius: 12px;
+  box-shadow: inset 0 0 6px rgba(230, 180, 91, 0.18),
+    inset 0 0 1px rgba(255, 255, 255, 0.35);
+  pointer-events: none;
+  z-index: 1;
+}
+
+/* 右下角小金点：与卡背的 accent 呼应，是「卡」而非真图标的静态线索。 */
+.card-face-inner.is-photo::before {
+  content: "";
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--accent);
+  opacity: 0.85;
+  z-index: 1;
+  pointer-events: none;
 }
 
 /* 全格画布按格尺寸整幅渲染：图标已在画布内的原始像素位置，不能再缩放。 */
@@ -677,27 +768,34 @@ button {
   transform: translateY(-2px);
 }
 
+/* 透明卡面 hover 只增强边缘发光，不位移/缩放：图标必须保持 1:1 原位。 */
+.card-face:hover .card-face-inner.is-photo::after {
+  border-color: rgba(255, 255, 255, 0.55);
+  box-shadow: inset 0 0 10px rgba(230, 180, 91, 0.35),
+    inset 0 0 2px rgba(255, 255, 255, 0.5);
+}
+
 .card.is-dragging {
   cursor: grabbing;
   z-index: 30;
 }
 
-.card.is-dragging .card-inner {
-  transform: scale(1.06) rotate(1.5deg);
-}
-
+/* 卡背拖动可轻微放大；透明卡面必须保持原尺寸，只用边缘发光提示。 */
 .card-back.is-dragging .card-inner {
+  transform: scale(1.06) rotate(1.5deg);
   box-shadow: 0 18px 34px rgba(0, 0, 0, 0.42);
 }
 
-.card.is-drop-target .card-inner,
-.card.is-selected .card-inner {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
+.card-face.is-dragging .card-face-inner.is-photo::after {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 14px rgba(230, 180, 91, 0.5),
+    0 0 12px rgba(230, 180, 91, 0.35);
 }
 
-.card.is-kb-target .card-inner {
-  outline: 2px dashed var(--accent);
+/* outline 画在 .card 上（与整格命中区重合），不再依赖卡背的 3px 内缩。 */
+.card.is-drop-target,
+.card.is-selected {
+  outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
 
@@ -712,22 +810,12 @@ button {
   }
 }
 
-@keyframes card-flip-in {
-  from {
-    opacity: 0;
-    transform: perspective(700px) rotateY(-74deg);
-  }
-  to {
-    opacity: 1;
-    transform: none;
-  }
-}
-
 .hud-wrap {
   position: absolute;
   top: 0;
   left: 0;
   z-index: 40;
+  pointer-events: auto;
   transition: transform 260ms var(--ease);
 }
 
@@ -772,9 +860,11 @@ button {
 .hud-progress-fill {
   display: block;
   height: 100%;
-  width: 0;
+  width: 100%;
   background: var(--accent);
-  transition: width 260ms var(--ease);
+  transform: scaleX(0);
+  transform-origin: left center;
+  transition: transform 260ms var(--ease);
 }
 
 .hud-stat {
@@ -857,12 +947,6 @@ button {
   }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .confirm-button {
-    animation: none;
-  }
-}
-
 /* 作者样式会覆盖 UA 的 [hidden]：显式补回，否则隐藏的弹窗层仍铺满全屏拦截点击 */
 [hidden] {
   display: none !important;
@@ -872,6 +956,7 @@ button {
   position: absolute;
   inset: 0;
   z-index: 90;
+  pointer-events: auto;
   display: grid;
   place-items: center;
   background: rgba(8, 10, 14, 0.34);
@@ -999,6 +1084,7 @@ button {
 
 .toast {
   position: absolute;
+  pointer-events: none;
   left: 50%;
   bottom: 96px;
   transform: translateX(-50%);

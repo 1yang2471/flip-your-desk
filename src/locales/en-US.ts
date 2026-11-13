@@ -2,6 +2,7 @@ import type { MessageKey } from "./zh-CN";
 
 export const enUS = {
   "app.name": "Flip Your Desk",
+  "app.windowTitle": "Flip Your Desk",
   "app.tagline": "A memory game played on your own desktop icons",
 
   "launcher.env": "Environment",
@@ -122,5 +123,7 @@ export const enUS = {
   "error.mock_not_available": "Demo mode is not available in a release build.",
   "error.unsupported_platform": "This build supports Windows only.",
   "error.tauri": "Internal application error.",
+  "error.encode_icon": "Could not process the icon image. Try again.",
+  "error.pin_over_desktop": "Could not pin the overlay to the desktop layer. Try again.",
   "error.window_minimize_failed": "Could not minimize the window.",
 } satisfies Record<MessageKey, string>;

@@ -1,5 +1,6 @@
 export const zhCN = {
   "app.name": "Flip Your Desk",
+  "app.windowTitle": "Flip Your Desk · 翻桌",
   "app.tagline": "把自己的桌面翻成一场记忆游戏",
 
   "launcher.env": "环境检查",
@@ -120,6 +121,8 @@ export const zhCN = {
   "error.mock_not_available": "正式版不提供演示模式。",
   "error.unsupported_platform": "当前版本仅支持 Windows。",
   "error.tauri": "应用内部错误。",
+  "error.encode_icon": "图标图片处理失败，请重试。",
+  "error.pin_over_desktop": "无法把覆盖层固定在桌面层，请重试。",
   "error.window_minimize_failed": "最小化失败。",
 } as const;
 

@@ -1,6 +1,7 @@
 import { listen } from "@tauri-apps/api/event";
 
 import { api, asAppError } from "./api";
+import { storedMuted } from "./audio";
 import { clear, h, iconEl } from "./dom";
 import {
   APP_VERSION,
@@ -8,6 +9,7 @@ import {
   displaySummary,
   errorText,
   pluralKey,
+  tDynamic,
   storeLang,
   t,
   type Lang,
@@ -39,7 +41,7 @@ export async function initLauncher(root: HTMLElement): Promise<void> {
     probing: true,
     starting: false,
     error: null,
-    muted: false,
+    muted: storedMuted(),
   };
 
   const actions: LauncherActions = {
@@ -81,7 +83,9 @@ export async function initLauncher(root: HTMLElement): Promise<void> {
     try {
       const env = await api.probeEnvironment();
       state.env = env;
-      state.muted = env.muted;
+      // 本地持久化优先：后端 InnerState 每次启动都是 false。
+      state.muted = storedMuted();
+      if (state.muted !== env.muted) void api.setMuted(state.muted);
     } catch (error) {
       const payload = asAppError(error);
       console.error("probe failed", payload);
@@ -244,7 +248,7 @@ function renderLauncher(
   } else {
     addRow(
       t(lang, "launcher.status.icons"),
-      t(lang, pluralKey("launcher.value.icons", env.iconCount), { n: env.iconCount }),
+      tDynamic(lang, pluralKey("launcher.value.icons", env.iconCount), { n: env.iconCount }),
       env.iconCount >= 2 ? "ok" : "bad",
     );
     addRow(
@@ -272,8 +276,8 @@ function renderLauncher(
       const issue = h("div", "issue");
       issue.appendChild(iconEl("alert", 14));
       const text = h("div", "issue-text");
-      text.appendChild(h("p", "issue-name", t(lang, `issue.${code}.title`)));
-      text.appendChild(h("p", "issue-hint", t(lang, `issue.${code}.hint`)));
+      text.appendChild(h("p", "issue-name", tDynamic(lang, `issue.${code}.title`)));
+      text.appendChild(h("p", "issue-hint", tDynamic(lang, `issue.${code}.hint`)));
       issue.appendChild(text);
       issues.appendChild(issue);
     }

@@ -38,16 +38,29 @@ export function storeLang(lang: Lang): void {
 
 export function t(
   lang: Lang,
-  key: MessageKey | string,
+  key: MessageKey,
   vars: Record<string, string | number> = {},
 ): string {
   const dict = dictionaries[lang];
   let template = dict[key] ?? dictionaries["zh-CN"][key];
-  if (template === undefined) return key;
+  if (template === undefined) {
+    if (import.meta.env.DEV) console.warn(`[i18n] 缺少文案: ${key}`);
+    return key;
+  }
   for (const [name, value] of Object.entries(vars)) {
     template = template.replaceAll(`{${name}}`, String(value));
   }
   return template;
+}
+
+/** 运行时拼接的 key（如 `issue.${code}.title`）：必须显式走这个通道，
+ *  并在 dev 下对缺失 key 告警，避免静默把 key 当文案显示给用户。 */
+export function tDynamic(
+  lang: Lang,
+  key: string,
+  vars: Record<string, string | number> = {},
+): string {
+  return t(lang, key as MessageKey, vars);
 }
 
 export function pluralKey(base: string, n: number): string {
@@ -66,8 +79,8 @@ export function formatDuration(ms: number): string {
 
 export function errorText(lang: Lang, code: string): string {
   const key = `error.${code}`;
-  if (key in dictionaries[lang]) return t(lang, key);
-  if (key in dictionaries["zh-CN"]) return t(lang, key);
+  if (key in dictionaries[lang]) return tDynamic(lang, key);
+  if (key in dictionaries["zh-CN"]) return tDynamic(lang, key);
   return t(lang, "error.unknown");
 }
 
