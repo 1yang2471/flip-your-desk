@@ -53,7 +53,7 @@ export const enUS = {
   "overlay.boardAria": "Desktop cards",
   "overlay.confirm": "Confirm",
   "overlay.confirmAria": "Finish the round and see your accuracy",
-  "overlay.esc": "Esc to quit",
+  "overlay.exitButton": "Quit round",
   "overlay.timeLabel": "Time",
   "overlay.moves.one": "1 move",
   "overlay.moves.other": "{n} moves",

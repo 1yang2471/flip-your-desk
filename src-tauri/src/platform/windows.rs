@@ -22,8 +22,9 @@ use windows::Win32::System::Threading::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     FindWindowExW, FindWindowW, GetSystemMetrics, GetWindowLongW, GetWindowRect,
-    GetWindowThreadProcessId, IsWindowVisible, SendMessageTimeoutW, GWL_STYLE, SMTO_ABORTIFHUNG,
-    SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN,
+    GetWindowThreadProcessId, IsWindowVisible, SendMessageTimeoutW, SetWindowPos, GWL_STYLE,
+    SMTO_ABORTIFHUNG, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN,
+    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
 };
 
 use crate::error::{AppError, AppResult};
@@ -513,29 +514,6 @@ impl<'a> VisibilityGuard<'a> {
             hidden_by_us: true,
         })
     }
-
-    fn restore(&mut self) -> AppResult<()> {
-        if !self.hidden_by_us {
-            return Ok(());
-        }
-        let desktop = self.desktop;
-        desktop.toggle_icons()?;
-        if desktop.wait_visible(true, Duration::from_millis(1200)) {
-            self.hidden_by_us = false;
-            Ok(())
-        } else {
-            // 再试一次，仍失败则把状态留给 Drop。
-            let _ = desktop.toggle_icons();
-            if desktop.wait_visible(true, Duration::from_millis(1200)) {
-                self.hidden_by_us = false;
-                return Ok(());
-            }
-            Err(AppError::with_detail(
-                "icon_visibility_toggle_failed",
-                "desktop icons did not come back",
-            ))
-        }
-    }
 }
 
 impl Drop for VisibilityGuard<'_> {
@@ -545,6 +523,14 @@ impl Drop for VisibilityGuard<'_> {
             let _ = desktop.toggle_icons();
             let _ = desktop.wait_visible(true, Duration::from_millis(1200));
         }
+    }
+}
+
+impl VisibilityGuard<'_> {
+    /// 交棒：本次隐藏由调用方接管（例如整局都想保持图标隐藏），
+    /// Drop 不再自动恢复。
+    fn commit(&mut self) {
+        self.hidden_by_us = false;
     }
 }
 
@@ -911,6 +897,45 @@ pub fn monitor_work_area(x: i32, y: i32, w: u32, h: u32) -> Option<(i32, i32, u3
     ))
 }
 
+/// 显示/隐藏桌面图标。整局游戏期间保持隐藏，否则卡牌缝隙与拖动后的
+/// 空位会漏出真实图标（既穿帮又等于给出答案）。
+pub fn set_icons_visible(visible: bool) -> AppResult<()> {
+    let desktop = Desktop::open()?;
+    if desktop.icons_visible() == visible {
+        return Ok(());
+    }
+    desktop.toggle_icons()?;
+    if desktop.wait_visible(visible, Duration::from_millis(1500)) {
+        Ok(())
+    } else {
+        Err(AppError::with_detail(
+            "icon_visibility_toggle_failed",
+            format!("desktop icons did not become visible={visible}"),
+        ))
+    }
+}
+
+/// 把窗口钉在桌面层：z 序紧贴 Progman 上方，于是桌面之上、所有普通窗口之下。
+/// 普通窗口因此可以随时盖住卡牌并正常接收点击。
+pub fn pin_window_over_desktop(hwnd: isize) -> AppResult<()> {
+    let Some(anchor) = find_desktop_windows().map(|(progman, _, _)| progman) else {
+        return Ok(());
+    };
+    let window = HWND(hwnd as *mut core::ffi::c_void);
+    unsafe {
+        SetWindowPos(
+            window,
+            Some(anchor),
+            0,
+            0,
+            0,
+            0,
+            SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE,
+        )
+    }
+    .map_err(|err| AppError::with_detail("pin_over_desktop", err.to_string()))
+}
+
 pub fn capture(monitors: &[MonitorInfo]) -> AppResult<Captured> {
     let desktop = Desktop::open()?;
     if !desktop.icons_visible() {
@@ -936,11 +961,12 @@ pub fn capture(monitors: &[MonitorInfo]) -> AppResult<Captured> {
     let (capture_hwnd, origin) = capture_bounds(&desktop)?;
     let (with_icons, _) = capture_window(capture_hwnd)?;
 
+    // 隐藏真实图标拍“干净”背景。成功后保持隐藏（整局都用它盖住答案，
+    // 否则卡牌缝隙与拖动后的空位会漏出真实图标）；失败则由 Guard 的
+    // Drop 自动恢复，绝不把桌面停在隐藏态。
     let mut guard = VisibilityGuard::hide(&desktop)?;
-    let clean_result = capture_window(capture_hwnd);
-    let restore_result = guard.restore();
-    let (clean, _) = clean_result?;
-    restore_result?;
+    let (clean, _) = capture_window(capture_hwnd)?;
+    guard.commit();
 
     // id 必须是 0..len 连续：它同时是游戏槽位号（placements 按此索引），
     // 过滤掉屏外图标后不能再沿用原始 listview 索引。

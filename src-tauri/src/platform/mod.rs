@@ -27,9 +27,13 @@ pub struct ApplyReport {
 #[cfg(windows)]
 mod windows;
 #[cfg(windows)]
-pub use windows::{apply_positions, capture, monitor_work_area, probe};
+pub use windows::{
+    apply_positions, capture, monitor_work_area, pin_window_over_desktop, probe, set_icons_visible,
+};
 
 #[cfg(not(windows))]
 mod unsupported;
 #[cfg(not(windows))]
-pub use unsupported::{apply_positions, capture, monitor_work_area, probe};
+pub use unsupported::{
+    apply_positions, capture, monitor_work_area, pin_window_over_desktop, probe, set_icons_visible,
+};

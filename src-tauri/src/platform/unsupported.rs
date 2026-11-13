@@ -26,3 +26,11 @@ pub fn apply_positions(_positions: &[IconWrite]) -> AppResult<ApplyReport> {
 pub fn monitor_work_area(_x: i32, _y: i32, _w: u32, _h: u32) -> Option<(i32, i32, u32, u32)> {
     None
 }
+
+pub fn set_icons_visible(_visible: bool) -> AppResult<()> {
+    Err(AppError::new("unsupported_platform"))
+}
+
+pub fn pin_window_over_desktop(_hwnd: isize) -> AppResult<()> {
+    Err(AppError::new("unsupported_platform"))
+}

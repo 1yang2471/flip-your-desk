@@ -30,6 +30,8 @@ struct InnerState {
     start_token: u64,
     /// 保存/恢复正在写回桌面图标位置；期间拒绝退出与游戏命令，防半残桌面。
     writing: bool,
+    /// 本局把真实桌面图标隐藏了（避免卡牌缝隙/拖动空位漏出答案）。
+    icons_hidden: bool,
 }
 
 impl Default for AppState {
@@ -160,19 +162,86 @@ fn close_overlays(app: &AppHandle, count: usize) {
     }
 }
 
+/// 把覆盖层钉在桌面层（Progman 正上方）：桌面之上、所有普通窗口之下。
+fn pin_overlays(app: &AppHandle, count: usize) {
+    for index in 0..count {
+        if let Some(window) = app.get_webview_window(&format!("overlay-{index}")) {
+            if let Ok(hwnd) = window.hwnd() {
+                let _ = platform::pin_window_over_desktop(hwnd.0 as isize);
+            }
+        }
+    }
+}
+
+/// 钉底心跳：任何原因把覆盖层抬到普通窗口之上（外部 z 序变动、Win+D 等）
+/// 都会在一个周期内被压回桌面层，保证其它窗口始终可点可用。
+fn spawn_zorder_keeper(app: AppHandle, count: usize) {
+    std::thread::spawn(move || loop {
+        {
+            let state = app.state::<AppState>();
+            if lock_state(&state).round.is_none() {
+                return;
+            }
+        }
+        pin_overlays(&app, count);
+        std::thread::sleep(Duration::from_millis(1500));
+    });
+}
+
+fn icon_marker_path(app: &AppHandle) -> Option<std::path::PathBuf> {
+    app.path()
+        .app_config_dir()
+        .ok()
+        .map(|dir| dir.join("icons-hidden.flag"))
+}
+
+/// 记录“桌面图标正被本应用隐藏”。进程被强杀时靠它在下一次启动恢复图标。
+fn set_icon_marker(app: &AppHandle, present: bool) {
+    let Some(path) = icon_marker_path(app) else {
+        return;
+    };
+    if present {
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let _ = std::fs::write(&path, b"1");
+    } else {
+        let _ = std::fs::remove_file(&path);
+    }
+}
+
+/// 恢复真实桌面图标（幂等）。所有退出、失败与超时路径都必须调用。
+fn restore_desktop_icons(app: &AppHandle) {
+    let state = app.state::<AppState>();
+    let hidden = {
+        let mut inner = lock_state(&state);
+        let hidden = inner.icons_hidden;
+        inner.icons_hidden = false;
+        hidden
+    };
+    if hidden {
+        let _ = platform::set_icons_visible(true);
+    }
+    set_icon_marker(app, false);
+}
+
+/// 仅调试：在普通窗口里跑完整流程，避免全屏应用/游戏抢占桌面。
+fn test_window_mode() -> bool {
+    cfg!(debug_assertions) && std::env::var_os("FLIP_YOUR_DESK_TEST_WINDOW").is_some()
+}
+
 fn create_overlays(app: &AppHandle, monitors: &[MonitorInfo]) -> AppResult<Vec<usize>> {
-    // 仅调试：在普通窗口里跑完整流程，避免全屏应用/游戏抢占桌面。
-    let test_window =
-        cfg!(debug_assertions) && std::env::var_os("FLIP_YOUR_DESK_TEST_WINDOW").is_some();
+    let test_window = test_window_mode();
     let mut created = Vec::new();
     for monitor in monitors {
         let label = format!("overlay-{}", monitor.index);
         let builder = WebviewWindowBuilder::new(app, &label, WebviewUrl::App("index.html".into()))
             .title("Flip Your Desk")
             .decorations(false)
-            // 非置顶：其他窗口可以盖住卡牌正常办公，点击桌面区域卡牌回到前台。
-            // 这正是“边玩边处理需要处理的事”的产品形态。
+            // 非置顶 + 不可激活：普通窗口可随时盖住卡牌并正常接收点击。
+            // 若可被激活，点击卡牌会让覆盖层浮到所有普通窗口之上，把它们“冻住”。
             .always_on_top(false)
+            .focusable(false)
             .skip_taskbar(true)
             .resizable(false)
             .maximizable(false)
@@ -245,6 +314,9 @@ async fn start_round(
         return Err(AppError::new("mock_not_available"));
     }
 
+    // 上一局若异常退出可能留下隐藏态，先恢复再用它拍快照。
+    restore_desktop_icons(&app);
+
     // capture 是重阻塞的 Win32 侦察（跨进程消息 + 两次全屏截图），
     // 放进阻塞线程池，避免占用 async 工作线程拖慢其它窗口的 IPC。
     let snapshot = if mock {
@@ -255,6 +327,9 @@ async fn start_round(
             tauri::async_runtime::spawn_blocking(move || platform::capture(&monitors_for_capture))
                 .await
                 .map_err(AppError::from)??;
+        // capture 成功后真实图标保持隐藏，整局都用它盖住答案。
+        lock_state(&state).icons_hidden = true;
+        set_icon_marker(&app, true);
         Snapshot {
             icons: captured.icons,
             monitors: monitors.clone(),
@@ -262,6 +337,7 @@ async fn start_round(
     };
 
     if snapshot.icons.len() < 2 {
+        restore_desktop_icons(&app);
         return Err(AppError::new("too_few_icons"));
     }
 
@@ -286,6 +362,7 @@ async fn start_round(
 
     if let Err(err) = create_overlays(&app, &monitors) {
         lock_state(&state).round = None;
+        restore_desktop_icons(&app);
         return Err(err);
     }
 
@@ -310,6 +387,7 @@ fn spawn_overlay_timeout(app: AppHandle, token: u64, overlay_count: usize) {
         inner.round = None;
         drop(inner);
         close_overlays(&app, count);
+        restore_desktop_icons(&app);
         if let Some(launcher) = app.get_webview_window("launcher") {
             let _ = launcher.show();
             let _ = launcher.set_focus();
@@ -322,7 +400,6 @@ fn spawn_overlay_timeout(app: AppHandle, token: u64, overlay_count: usize) {
 fn overlay_ready(app: AppHandle, state: State<'_, AppState>, monitor: usize) -> AppResult<()> {
     let mut ready = false;
     let mut public = None;
-    let mut primary = None;
     {
         let mut inner = lock_state(&state);
         if inner.round.is_none() {
@@ -337,7 +414,6 @@ fn overlay_ready(app: AppHandle, state: State<'_, AppState>, monitor: usize) -> 
                 round.begin();
                 public = Some(round.public_state());
             }
-            primary = inner.monitors.iter().find(|m| m.primary).map(|m| m.index);
             ready = true;
         }
     }
@@ -349,10 +425,10 @@ fn overlay_ready(app: AppHandle, state: State<'_, AppState>, monitor: usize) -> 
                 let _ = window.show();
             }
         }
-        if let Some(index) = primary {
-            if let Some(window) = app.get_webview_window(&format!("overlay-{index}")) {
-                let _ = window.set_focus();
-            }
+        // 显示后再钉一次：show() 可能重新抬高窗口。调试窗留给开发者观察，不钉底。
+        if !test_window_mode() {
+            pin_overlays(&app, count);
+            spawn_zorder_keeper(app.clone(), count);
         }
         if let Some(launcher) = app.get_webview_window("launcher") {
             let _ = launcher.hide();
@@ -493,6 +569,9 @@ async fn save_and_exit(app: AppHandle, state: State<'_, AppState>) -> AppResult<
         app.exit(0);
         return Ok(());
     }
+    // 写回前先让真实图标回到桌面：apply_positions 需要图标可见，
+    // 视觉上也更自然（图标当场移动到最终位置）。
+    restore_desktop_icons(&app);
     {
         let mut inner = lock_state(&state);
         inner.writing = true;
@@ -571,6 +650,7 @@ async fn restore_and_exit(app: AppHandle, state: State<'_, AppState>) -> AppResu
         app.exit(0);
         return Ok(());
     }
+    restore_desktop_icons(&app);
     {
         let mut inner = lock_state(&state);
         inner.writing = true;
@@ -595,6 +675,7 @@ fn quit_app(app: AppHandle, state: State<'_, AppState>) -> AppResult<()> {
     if lock_state(&state).writing {
         return Err(AppError::new("write_in_progress"));
     }
+    restore_desktop_icons(&app);
     app.exit(0);
     Ok(())
 }
@@ -624,9 +705,22 @@ pub fn run() {
                     // 外部（例如全屏游戏）强制关闭覆盖窗：先挡住，再安全退出，
                     // 避免留下隐藏的启动窗和不可用状态。
                     api.prevent_close();
+                    restore_desktop_icons(handle);
                     handle.exit(0);
                 }
             }
+        })
+        .setup(|app| {
+            // 上次进程被强杀可能留下“图标已隐藏”的残留：启动时先恢复。
+            let handle = app.handle();
+            if icon_marker_path(handle)
+                .map(|p| p.exists())
+                .unwrap_or(false)
+            {
+                let _ = platform::set_icons_visible(true);
+                set_icon_marker(handle, false);
+            }
+            Ok(())
         })
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![

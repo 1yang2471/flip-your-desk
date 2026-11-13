@@ -58,6 +58,11 @@ export class OverlayGame {
 
   private state: PublicState;
   private drag: DragState | null = null;
+  private dragListeners: {
+    move: (event: Event) => void;
+    end: (event: Event) => void;
+    cancel: () => void;
+  } | null = null;
   private selectedIcon: number | null = null;
   private selectedSlot: number | null = null;
   private targetSlot: number | null = null;
@@ -170,8 +175,8 @@ export class OverlayGame {
     const exit = h("button", "hud-button");
     exit.type = "button";
     exit.appendChild(iconEl("close", 12));
-    exit.title = t(this.lang, "overlay.esc");
-    exit.setAttribute("aria-label", t(this.lang, "overlay.esc"));
+    exit.title = t(this.lang, "overlay.exitButton");
+    exit.setAttribute("aria-label", t(this.lang, "overlay.exitButton"));
     exit.addEventListener("click", () => this.showExitConfirm());
     hud.appendChild(exit);
 
@@ -401,10 +406,15 @@ export class OverlayGame {
       inner.appendChild(h("span", "card-name", icon.name));
       element.appendChild(inner);
       element.setAttribute("aria-label", t(this.lang, "overlay.cardFaceAria", { name: icon.name }));
-      element.addEventListener("click", () => this.onFaceClick(icon.id, slotId));
-      element.addEventListener("pointerdown", (event) =>
-        this.onPointerDown(event, icon.id, slot, element!),
-      );
+      // 槽位必须每次从 dataset 现读：卡牌移动后被复用，闭包里的 slot 会过期。
+      element.addEventListener("click", () => {
+        const slotId = Number(element!.dataset.slot);
+        if (Number.isFinite(slotId)) this.onFaceClick(icon.id, slotId);
+      });
+      element.addEventListener("pointerdown", (event) => {
+        const current = this.slots.get(Number(element!.dataset.slot));
+        if (current) this.onPointerDown(event, icon.id, current, element!);
+      });
       inner.style.animation = "card-flip-in 280ms cubic-bezier(0.2, 0.8, 0.2, 1)";
       this.board.appendChild(element);
       this.faces.set(icon.id, element);
@@ -478,7 +488,11 @@ export class OverlayGame {
     if (this.state.finished || this.pending) return;
     if (event.button !== 0) return;
     event.preventDefault();
-    element.setPointerCapture(event.pointerId);
+    try {
+      element.setPointerCapture(event.pointerId);
+    } catch {
+      // 捕获失败也不能让拖动卡死：window 级监听仍会收到 pointerup。
+    }
     this.drag = {
       iconId,
       fromSlot: slot.id,
@@ -491,16 +505,35 @@ export class OverlayGame {
       armed: false,
       hoverSlot: null,
     };
-    const move = (moveEvent: PointerEvent) => this.onPointerMove(moveEvent);
-    const up = (upEvent: PointerEvent) => {
-      element.removeEventListener("pointermove", move);
-      element.removeEventListener("pointerup", up);
-      element.removeEventListener("pointercancel", up);
-      this.onPointerUp(upEvent);
-    };
-    element.addEventListener("pointermove", move);
-    element.addEventListener("pointerup", up);
-    element.addEventListener("pointercancel", up);
+    this.bindDragListeners();
+  }
+
+  /**
+   * 拖动监听挂在 window 上（捕获阶段）：指针捕获丢失、指针移出窗口、
+   * 窗口失焦时都能收到 pointerup/pointercancel，卡片绝不会卡在半空。
+   */
+  private bindDragListeners(): void {
+    if (this.dragListeners) return;
+    const move = (event: Event) => this.onPointerMove(event as PointerEvent);
+    const end = (event: Event) => this.finishDrag(event as PointerEvent);
+    const cancel = () => this.finishDrag(null);
+    this.dragListeners = { move, end, cancel };
+    window.addEventListener("pointermove", move, true);
+    window.addEventListener("pointerup", end, true);
+    window.addEventListener("pointercancel", end, true);
+    window.addEventListener("blur", cancel);
+    window.addEventListener("lostpointercapture", cancel, true);
+  }
+
+  private unbindDragListeners(): void {
+    const listeners = this.dragListeners;
+    if (!listeners) return;
+    this.dragListeners = null;
+    window.removeEventListener("pointermove", listeners.move, true);
+    window.removeEventListener("pointerup", listeners.end, true);
+    window.removeEventListener("pointercancel", listeners.end, true);
+    window.removeEventListener("blur", listeners.cancel);
+    window.removeEventListener("lostpointercapture", listeners.cancel, true);
   }
 
   private onPointerMove(event: PointerEvent): void {
@@ -527,36 +560,50 @@ export class OverlayGame {
     }
   }
 
-  private onPointerUp(event: PointerEvent): void {
+  private finishDrag(event: PointerEvent | null): void {
     const drag = this.drag;
+    this.unbindDragListeners();
     if (!drag) return;
     this.drag = null;
     drag.element.classList.remove("is-dragging");
     drag.element.style.transition = "";
+    try {
+      drag.element.releasePointerCapture(drag.pointerId);
+    } catch {
+      // 已经释放或从未捕获，忽略。
+    }
     void api.setDragHover(null).catch(() => undefined);
 
-    if (!drag.armed) return;
-
-    const point = this.globalPoint(event.clientX, event.clientY);
-    const target = this.hitTest(point.x, point.y);
-    if (target === null) {
-      drag.element.style.transform = `translate3d(${drag.slotX}px, ${drag.slotY}px, 0)`;
+    const back = `translate3d(${drag.slotX}px, ${drag.slotY}px, 0)`;
+    // 只是点击（没拖动）：立刻归位，把选中/交换交给 click 事件。
+    if (!drag.armed) {
+      drag.element.style.transform = back;
       return;
     }
+    // 中断（失焦/捕获丢失）或落在空白/原处：弹回原位，绝不悬停。
+    if (!event) {
+      drag.element.style.transform = back;
+      return;
+    }
+    const point = this.globalPoint(event.clientX, event.clientY);
+    const target = this.hitTest(point.x, point.y);
+    if (target === null || target === drag.fromSlot) {
+      drag.element.style.transform = back;
+      return;
+    }
+    // 落到别的卡位：与那里换位。
     const targetSlot = this.slots.get(target);
     if (targetSlot) {
       drag.element.style.transform = `translate3d(${targetSlot.x}px, ${targetSlot.y}px, 0)`;
     }
     this.sounds.drop();
-    void api
-      .moveCard(drag.fromSlot, target)
-      .catch((error) => {
-        const payload = asAppError(error);
-        console.error("move failed", payload);
-        this.toast(errorText(this.lang, payload.code));
-        this.sounds.error();
-        drag.element.style.transform = `translate3d(${drag.slotX}px, ${drag.slotY}px, 0)`;
-      });
+    void api.moveCard(drag.fromSlot, target).catch((error) => {
+      const payload = asAppError(error);
+      console.error("move failed", payload);
+      this.toast(errorText(this.lang, payload.code));
+      this.sounds.error();
+      drag.element.style.transform = back;
+    });
   }
 
   private globalPoint(clientX: number, clientY: number): { x: number; y: number } {

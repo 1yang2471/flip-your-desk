@@ -51,7 +51,7 @@ export const zhCN = {
   "overlay.boardAria": "桌面卡牌",
   "overlay.confirm": "确定",
   "overlay.confirmAria": "结束本局并查看正确率",
-  "overlay.esc": "Esc 退出",
+  "overlay.exitButton": "退出本局",
   "overlay.timeLabel": "用时",
   "overlay.moves.one": "1 步",
   "overlay.moves.other": "{n} 步",
