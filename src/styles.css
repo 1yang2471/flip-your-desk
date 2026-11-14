@@ -1252,6 +1252,22 @@ button {
   animation: card-breathe 2400ms var(--ease) 1;
 }
 
+/* C4 退出仪式：卡背依次翻回（多米诺）；A4：假图标滑向目标槽后淡出。 */
+@keyframes card-reveal {
+  0% { transform: rotateY(0deg); }
+  100% { transform: rotateY(-180deg); }
+}
+
+.card-back.revealing .card-back-inner {
+  animation: card-reveal 320ms var(--ease) forwards;
+}
+
+.card-back.sliding {
+  transition: transform 260ms var(--ease), opacity 260ms var(--ease);
+  transform: translate3d(var(--slide-x, 0px), var(--slide-y, 0px), 0);
+  opacity: 0;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

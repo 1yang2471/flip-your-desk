@@ -23,8 +23,8 @@ test("退出仪式与图标滑行：CSS 类与三个按钮接线齐全", () => {
   assert.match(f, /\.play\(/, "存在 play 调用");
   assert.match(f, /\.cancel\(\)/, "存在 cancel 调用");
   assert.match(f, /api\.quitApp\(\)/, "退出仍调 quit_app");
-  assert.match(f, /api\.restoreAndExit\(\)/, "回到原布局仍调 restoreAndExit");
-  assert.match(f, /api\.saveAndExit\(\)/, "保存仍调 saveAndExit");
+  assert.match(f, /\.\s*restoreAndExit\(\)/, "回到原布局仍调 restoreAndExit");
+  assert.match(f, /\.\s*saveAndExit\(\)/, "保存仍调 saveAndExit");
 });
 ```
 

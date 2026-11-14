@@ -2,6 +2,7 @@ import { listen } from "@tauri-apps/api/event";
 
 import { api, asAppError } from "./api";
 import { Sounds } from "./audio";
+import { ExitChoreography } from "./choreography";
 import { clear, h, iconEl } from "./dom";
 import { PresenceController } from "./presence";
 import {
@@ -80,6 +81,7 @@ export class OverlayGame {
   /** 发牌级联的逐卡 tick 定时器，窗口销毁时统一清理。 */
   private dealTimers: number[] = [];
   private presence: PresenceController | null = null;
+  private choreography: ExitChoreography | null = null;
   private readonly reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
 
   constructor(view: OverlayView, root: HTMLElement) {
@@ -306,6 +308,23 @@ export class OverlayGame {
     }
   }
 
+  /** 按 y/x 排序取所有卡背元素，交给编排器；动画期间不发任何游戏命令。 */
+  private runExit(then: () => void, slide = false): void {
+    const ordered = [...this.view.slots].sort((a, b) => a.y - b.y || a.x - b.x);
+    const cards = ordered
+      .map((slot) => this.backs.get(slot.id))
+      .filter((el): el is HTMLButtonElement => el !== undefined);
+    this.choreography = new ExitChoreography(cards);
+    this.choreography.play(then, slide);
+  }
+
+  /** 动画中用户反悔：移除类、pending 归位，then 不会执行。 */
+  private cancelExit(): void {
+    this.choreography?.cancel();
+    this.choreography = null;
+    this.pending = false;
+  }
+
   /** 覆盖窗关闭/重建时释放定时器与事件监听，避免多局叠加。 */
   destroy(): void {
     if (this.clockTimer !== null) window.clearInterval(this.clockTimer);
@@ -317,6 +336,8 @@ export class OverlayGame {
     document.removeEventListener("keydown", this.onKeyDownBound);
     this.presence?.dispose();
     this.presence = null;
+    this.choreography?.cancel();
+    this.choreography = null;
   }
 
   private onKeyDown(event: KeyboardEvent): void {
@@ -1014,15 +1035,17 @@ export class OverlayGame {
       save.addEventListener("click", () => {
         if (this.pending) return;
         this.pending = true;
-        this.showBusy(panel, t(this.lang, "result.applying"));
-        void api
-          .saveAndExit()
-          .catch((error) => {
-            this.pending = false;
-            const payload = asAppError(error);
-            console.error("save failed", payload);
-            this.showBusy(panel, errorText(this.lang, payload.code), true);
-          });
+        this.runExit(() => {
+          this.showBusy(panel, t(this.lang, "result.applying"));
+          void api
+            .saveAndExit()
+            .catch((error) => {
+              this.pending = false;
+              const payload = asAppError(error);
+              console.error("save failed", payload);
+              this.showBusy(panel, errorText(this.lang, payload.code), true);
+            });
+        }, true);
       });
       actions.appendChild(save);
 
@@ -1032,15 +1055,17 @@ export class OverlayGame {
       restore.addEventListener("click", () => {
         if (this.pending) return;
         this.pending = true;
-        this.showBusy(panel, t(this.lang, "result.restoring"));
-        void api
-          .restoreAndExit()
-          .catch((error) => {
-            this.pending = false;
-            const payload = asAppError(error);
-            console.error("restore failed", payload);
-            this.showBusy(panel, errorText(this.lang, payload.code), true);
-          });
+        this.runExit(() => {
+          this.showBusy(panel, t(this.lang, "result.restoring"));
+          void api
+            .restoreAndExit()
+            .catch((error) => {
+              this.pending = false;
+              const payload = asAppError(error);
+              console.error("restore failed", payload);
+              this.showBusy(panel, errorText(this.lang, payload.code), true);
+            });
+        });
       });
       actions.appendChild(restore);
       panel.appendChild(actions);
@@ -1146,7 +1171,13 @@ export class OverlayGame {
     quit.type = "button";
     quit.appendChild(h("span", "", t(this.lang, "exit.confirm")));
     quit.addEventListener("click", () => {
-      void api.quitApp();
+      if (this.pending) return;
+      this.pending = true;
+      // 直接关层，不走 hideExitConfirm()：后者会 cancelExit() 干掉刚启动的动画。
+      this.exitOpen = false;
+      this.exitLayer.hidden = true;
+      clear(this.exitLayer);
+      this.runExit(() => void api.quitApp());
     });
     actions.appendChild(quit);
     panel.appendChild(actions);
@@ -1157,6 +1188,7 @@ export class OverlayGame {
 
   private hideExitConfirm(): void {
     this.exitOpen = false;
+    this.cancelExit();
     this.exitLayer.hidden = true;
     clear(this.exitLayer);
   }

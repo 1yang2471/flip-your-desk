@@ -616,6 +616,31 @@ test("ExitChoreography: then 在动画完成回调里、cancel 阻止 then、red
   assert.match(cancelBlock, /cardTimers/, "cancel 清理逐卡定时器");
 });
 
+test("退出仪式与图标滑行：CSS 类与三个按钮接线齐全", () => {
+  const css = readFileSync(join(ROOT, "src/styles.css"), "utf8");
+  assert.match(css, /@keyframes card-reveal/, "存在翻回 keyframe");
+  assert.match(css, /\.sliding/, "存在滑行类");
+  const f = readFileSync(join(ROOT, "src/overlay.ts"), "utf8");
+  assert.match(f, /new ExitChoreography/, "创建了编排器");
+  assert.match(f, /\.play\(/, "存在 play 调用");
+  assert.match(f, /\.cancel\(\)/, "存在 cancel 调用");
+  assert.match(f, /api\.quitApp\(\)/, "退出仍调 quit_app");
+  assert.match(f, /\.\s*restoreAndExit\(\)/, "回到原布局仍调 restoreAndExit");
+  assert.match(f, /\.\s*saveAndExit\(\)/, "保存仍调 saveAndExit");
+});
+
+test("硬边界：后端零改动、动画期间零游戏命令", () => {
+  const rust = readFileSync(join(ROOT, "src-tauri/src/lib.rs"), "utf8");
+  assert.match(rust, /fn save_and_exit/, "save_and_exit 仍在");
+  assert.match(rust, /fn restore_and_exit/, "restore_and_exit 仍在");
+  assert.ok(!/revealing|choreography|ExitChoreography|IDLE_MS/.test(rust), "后端无动画/空闲标记");
+  const f = readFileSync(join(ROOT, "src/overlay.ts"), "utf8");
+  const start = f.indexOf("private runExit(");
+  const end = f.indexOf("private cancelExit()");
+  const block = f.slice(start, end);
+  assert.ok(!/api\.|invoke|emit/.test(block), "runExit 内部零 IPC");
+});
+
 let failed = 0;
 try {
   await start();
