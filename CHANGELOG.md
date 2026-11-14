@@ -5,12 +5,13 @@ All notable changes to this project are documented here.
 ## 0.3.0
 
 - **Desktop presence layer (purely visual, no backend changes).**
-  - Focus-away doze: switch away from the window and every flipped-open face turns back down while the HUD collapses to a small gold dot; returning restores them exactly, with no change to game state or progress
   - Idle breathing: after 8 seconds without input the card backs give a single 1px bob
   - Exit ritual: quitting (Esc confirm) or restoring the original layout plays a card-by-card domino and only runs the real command once it finishes; the animation is cancellable via Esc or the visible "keep playing" button
   - Saving a new layout keeps the same "animate, then run the real command" ordering (the fake icon slide was dropped: it had no effect under the real CSS)
-- Fixed the desktop-presence CSS so breathing/domino actually play (they were losing to the inline deal-in animation); the doze veil now hides the face content and repaints a card back on the card instead of flipping it (a rotateY flip left mirrored icon/text visible, because the face inner uses `transform-style: preserve-3d`)
-- Fixed the launcher header: the language button no longer stacks "中文" vertically and the tagline stays on one line, so the status panel no longer shows a needless scrollbar
+- Removed the focus-away doze after manual testing. Overlay windows are deliberately non-focusable (so clicking a card cannot raise them above normal windows), which made "come back and it restores" unreliable: the cards flipped back and needed a click to return. Breathing and the exit ritual are unaffected.
+- Fixed breathing/domino animations losing to the inline deal-in animation
+- Fixed the launcher: switching language no longer flashes the whole window transparent, the language button no longer stacks "中文" vertically, and the status panel no longer shows a needless scrollbar
+- Fixed the selected card showing two stacked gold rings (programmatic focus added a `:focus-visible` ring on top of the selection ring)
 - Frontend regression tests now assert real computed styles and real module behavior instead of source-string matches; `npm test` builds first, and CI/release run it
 
 ## 0.2.0

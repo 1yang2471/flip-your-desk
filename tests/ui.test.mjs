@@ -23,7 +23,6 @@ if (!cssFile) throw new Error("dist/assets 未找到 CSS，先跑 npm run build"
 const cssText = readFileSync(join(ROOT, "dist/assets", cssFile), "utf8");
 
 /** 一张卡背 + 一张透明卡面，忠实复刻 overlay.ts 的生产 DOM：
- *  - veiled 由 JS 加在 .overlay-root（不是 .card）
  *  - 卡背内层带内联 card-in 入场动画（buildBoard 设置）
  *  - 卡片带内联 transform 定位
  *  这样 CSS 断言测的是真实层叠，而不是一个被简化过的理想 DOM。 */
@@ -566,56 +565,31 @@ test("Fences 提示：organizerDetected 非阻塞，文案双语就位", () => {
   assert.match(model, /organizer_detected/, "EnvReport 含 organizer_detected");
 });
 
-test("PresenceController: 只派发三个回调、不碰 DOM、可 dispose", () => {
+test("PresenceController: 只做空闲计时、不碰 DOM、可 dispose", () => {
   const f = readFileSync(join(ROOT, "src/presence.ts"), "utf8");
   assert.match(f, /export class PresenceController/, "导出 PresenceController");
-  assert.match(f, /onHide\?:/, "构造参数含 onHide");
-  assert.match(f, /onShow\?:/, "构造参数含 onShow");
   assert.match(f, /onIdle\?:/, "构造参数含 onIdle");
+  assert.ok(!/onHide|onShow/.test(f), "不再有盖牌回调（C1 已下线）");
   assert.match(f, /resetIdle\(\)/, "暴露 resetIdle");
   assert.match(f, /dispose\(\)/, "暴露 dispose");
-  assert.match(f, /addEventListener\("blur"/, "监听 blur");
-  assert.match(f, /addEventListener\("focus"/, "监听 focus");
   assert.match(f, /addEventListener\("visibilitychange"/, "监听 visibilitychange");
+  assert.ok(!/addEventListener\("blur"/.test(f), "不再监听 blur（focusable(false) 下不可靠）");
   assert.ok(!/querySelector|classList|createElement|appendChild/.test(f), "PresenceController 不操作 DOM");
   assert.match(f, /IDLE_MS\s*=\s*8000/, "空闲阈值常量为 8000ms");
 });
 
-test("摸鱼：veiled 时正面内容隐藏 + 重画卡背（真实层叠）", async () => {
-  const out = await fresh(`(() => {
-    const root = document.getElementById('root');
-    const face = document.getElementById('face');
-    const inner = document.getElementById('faceInner');
-    root.classList.add('veiled');
-    const cs = getComputedStyle(inner);
-    const before = getComputedStyle(face, '::before');
-    return {
-      dom: !!inner,
-      visibility: cs.visibility,
-      beforeContent: before.content,
-      beforePosition: before.position,
-    };
-  })()`);
-  assert.ok(out.dom, "正面 DOM 不被销毁");
-  assert.equal(out.visibility, "hidden", "卡面内容（图标/名字）被隐藏，不再出现镜像");
-  assert.match(out.beforeContent, /\?/, "卡片上重画了一个卡背（?）");
-  assert.equal(out.beforePosition, "absolute", "卡背覆盖层定位在卡片上");
-});
-
-test("摸鱼：HUD 收成小金点后退出/静音按钮仍可点", async () => {
-  const out = await fresh(`(() => {
-    const dot = document.createElement('div');
-    dot.className = 'hud-wrap hud-dozing';
-    dot.innerHTML = '<div class="hud"><span class="hud-progress">x</span><button class="hud-button" id="b1"></button><button class="hud-button" id="b2"></button></div>';
-    document.body.appendChild(dot);
-    const hud = dot.querySelector('.hud');
-    const b2 = document.getElementById('b2');
-    const r = b2.getBoundingClientRect();
-    const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
-    return { w: hud.getBoundingClientRect().width, hit: hit?.id ?? hit?.className ?? null };
-  })()`);
-  assert.ok(out.w <= 14, "HUD 收成小金点（≤14px）");
-  assert.equal(out.hit, "b2", "退出按钮（上层）仍命中自身，未被裁掉");
+test("PresenceController 行为：到点触发一次 onIdle，dispose 后不再触发", async () => {
+  const out = await tsBehaviorTest("src/presence.ts", `
+    let fired = 0;
+    const c = new PresenceController({ onIdle: () => { fired++; }, idleMs: 40 });
+    return new Promise((resolve) => setTimeout(() => {
+      const before = fired;
+      c.dispose();
+      setTimeout(() => resolve({ before, after: fired }), 120);
+    }, 120));
+  `);
+  assert.equal(out.before, 1, "空闲到点触发一次 onIdle");
+  assert.equal(out.after, 1, "dispose 后不再触发");
 });
 
 test("呼吸/退出仪式：类规则能压过内联 card-in 入场动画", async () => {
@@ -633,20 +607,10 @@ test("呼吸/退出仪式：类规则能压过内联 card-in 入场动画", asyn
   assert.equal(out.breathe, "card-breathe", "breathing 真的播起伏动画");
 });
 
-test("摸鱼是纯视觉伪装：onHide/onShow 不发 IPC、不改游戏状态", () => {
-  const f = readFileSync(join(ROOT, "src/overlay.ts"), "utf8");
-  const start = f.indexOf("private bindPresence()");
-  const end = f.indexOf("private breathe()");
-  const block = f.slice(start, end);
-  assert.match(block, /classList\.add\("veiled"\)/, "onHide 只加类");
-  assert.match(block, /classList\.remove\("veiled"\)/, "onShow 只移类");
-  assert.ok(!/api\.|invoke|emit|state-changed/.test(block), "Presence 接线块零 IPC / 零状态事件");
-});
-
 /** 在 CDP 页面里执行真源码：用 typescript 把 .ts 转译掉类型，去掉 export 后注入。
- *  choreography.ts 无 import，只依赖 window，可直接这样跑真实实现而非复制品。 */
-async function choreographyBehaviorTest(expression) {
-  const tsSource = readFileSync(join(ROOT, "src/choreography.ts"), "utf8");
+ *  被测模块只依赖 window/document、无 import，可直接这样跑真实实现而非复制品。 */
+async function tsBehaviorTest(relPath, expression) {
+  const tsSource = readFileSync(join(ROOT, relPath), "utf8");
   const js = ts.transpileModule(tsSource, {
     compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext },
   }).outputText.replace(/export /g, "");
@@ -657,7 +621,7 @@ async function choreographyBehaviorTest(expression) {
 }
 
 test("ExitChoreography 行为：cancel 后 then 绝不执行、逐卡类被清干净", async () => {
-  const out = await choreographyBehaviorTest(`
+  const out = await tsBehaviorTest("src/choreography.ts", `
     const card = document.getElementById('back');
     let fired = 0;
     const c = new ExitChoreography([card]);
@@ -673,7 +637,7 @@ test("ExitChoreography 行为：cancel 后 then 绝不执行、逐卡类被清�
 });
 
 test("ExitChoreography 行为：动画演完 then 执行一次", async () => {
-  const out = await choreographyBehaviorTest(`
+  const out = await tsBehaviorTest("src/choreography.ts", `
     const card = document.getElementById('back');
     let fired = 0;
     const c = new ExitChoreography([card]);

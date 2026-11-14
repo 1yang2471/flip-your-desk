@@ -285,23 +285,13 @@ export class OverlayGame {
   }
 
   private bindPresence(): void {
-    this.presence = new PresenceController({
-      onHide: () => {
-        this.root.classList.add("veiled");
-        this.hudWrap.classList.add("hud-dozing");
-      },
-      onShow: () => {
-        this.root.classList.remove("veiled");
-        this.hudWrap.classList.remove("hud-dozing");
-      },
-      onIdle: () => this.breathe(),
-    });
-    // 任何指针操作都重置空闲计时；隐藏态由 focus/blur 单独管。
+    this.presence = new PresenceController({ onIdle: () => this.breathe() });
+    // 任何指针操作都重置空闲计时。
     this.board.addEventListener("pointerdown", () => this.presence?.resetIdle());
   }
 
   private breathe(): void {
-    if (this.reducedMotion.matches || this.root.classList.contains("veiled")) return;
+    if (this.reducedMotion.matches) return;
     for (const back of this.backs.values()) {
       back.classList.remove("breathing");
       // 强制回流，保证同一个元素连续两次空闲都能重播。
@@ -555,7 +545,6 @@ export class OverlayGame {
       element.type = "button";
       element.dataset.icon = String(icon.id);
       element.dataset.slot = String(slotId);
-      element.dataset.tone = slot.tone;
       const inner = h("span", "card-inner card-face-inner");
       if (icon.image) {
         // 透明卡面：全格画布已把图标摆回格内原位，名字按桌面标签排版，
