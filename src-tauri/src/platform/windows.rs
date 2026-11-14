@@ -430,6 +430,11 @@ impl Desktop {
                 .min_by_key(|(_, it)| (it.x - screen_x).abs() as i64 + (it.y - screen_y).abs() as i64)
                 .map(|(i, _)| i);
             let Some(index) = index else {
+                // 标签瞬态下 read_items 可能拿到空集：等一拍重试；3 轮用尽才报错。
+                if _round < 2 {
+                    std::thread::sleep(Duration::from_millis(1000));
+                    continue;
+                }
                 return Err(AppError::with_detail(
                     "desktop_changed",
                     format!("\"{expected_name}\" 消失于写回途中"),
@@ -1326,7 +1331,7 @@ pub fn apply_positions(positions: &[IconWrite]) -> AppResult<ApplyReport> {
             break;
         }
         // 补写未落项，下一轮再等再判。
-        for name in &failed_write.clone() {
+        for name in failed_write.iter() {
             let Some(t) = resolved.iter().find(|t| t.name == *name) else { continue };
             let _ = desktop.set_item_position(t.x, t.y, name);
         }
