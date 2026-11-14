@@ -11,6 +11,8 @@
 > 位置说明：writing-plans 技能默认 `docs/superpowers/plans/`，本项目已有 `docs/plans/` 计划目录与 `docs/specs/` 规格目录，按项目约定放此处。
 > 对应规格：`docs/specs/2026-11-14-desktop-breathing-design.md`（已批准）。
 > 提交边界：**每个 Task 一个中文 conventional commit，只 commit 不 push**；全程不 bump 版本、不打 tag、不发版。
+>
+> **⚠ 后续修订（2026-11-14 审查后）**：本计划执行完毕后，`@tester` 独立审查 + CDP 实测发现 4 个严重缺陷（CSS 选择器与加类位置不匹配、内联 animation 压过类规则、A4 假滑行无效、动画不可取消），且新增断言多为假阳性。**下方任务正文保留为历史记录，不要再照抄执行**；最终实现以 [spec 修订版](../specs/2026-11-14-desktop-breathing-design.md) 与实际代码为准：A4 假滑行整项砍掉、测试改为 `getComputedStyle` / 真源码转译执行的真实断言、`npm test` 前置 build、CI/release 补 `npm test`。
 
 ---
 

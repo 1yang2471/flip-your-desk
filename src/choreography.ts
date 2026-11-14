@@ -15,7 +15,7 @@ export class ExitChoreography {
   }
 
   /** 依次给卡片加 .revealing（多米诺），全部完成后才执行 then。 */
-  play(then: () => void, slide = false): void {
+  play(then: () => void): void {
     this.cancel();
     this.then = then;
     if (this.reducedMotion.matches) {
@@ -25,7 +25,6 @@ export class ExitChoreography {
     this.cards.forEach((card, index) => {
       this.cardTimers.push(window.setTimeout(() => {
         card.classList.add("revealing");
-        if (slide) card.classList.add("sliding");
       }, index * this.perCard));
     });
     this.timer = window.setTimeout(() => this.finish(), REVEAL_MS);
@@ -33,20 +32,20 @@ export class ExitChoreography {
 
   /** 取消：移除所有类、清掉主定时器与逐卡定时器，then 绝不执行。 */
   cancel(): void {
+    this.clearTimers();
+    this.then = null;
+    for (const card of this.cards) card.classList.remove("revealing");
+  }
+
+  private clearTimers(): void {
     if (this.timer !== null) window.clearTimeout(this.timer);
     this.timer = null;
     for (const id of this.cardTimers) window.clearTimeout(id);
     this.cardTimers = [];
-    this.then = null;
-    for (const card of this.cards) {
-      card.classList.remove("revealing");
-      card.classList.remove("sliding");
-    }
   }
 
   private finish(): void {
-    this.timer = null;
-    this.cardTimers = [];
+    this.clearTimers();
     const then = this.then;
     this.then = null;
     then?.();

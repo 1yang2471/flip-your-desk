@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import assert from "node:assert/strict";
+import ts from "typescript";
 
 const ROOT = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const EDGE = ["C:", "Program Files (x86)", "Microsoft", "Edge", "Application", "msedge.exe"].join("\\");
@@ -21,15 +22,19 @@ const cssFile = readdirSync(join(ROOT, "dist/assets")).find((f) => /^index-.*\.c
 if (!cssFile) throw new Error("dist/assets 未找到 CSS，先跑 npm run build");
 const cssText = readFileSync(join(ROOT, "dist/assets", cssFile), "utf8");
 
-/** 一张卡背 + 一张透明卡面，复刻 overlay.ts 的 DOM 结构。 */
+/** 一张卡背 + 一张透明卡面，忠实复刻 overlay.ts 的生产 DOM：
+ *  - veiled 由 JS 加在 .overlay-root（不是 .card）
+ *  - 卡背内层带内联 card-in 入场动画（buildBoard 设置）
+ *  - 卡片带内联 transform 定位
+ *  这样 CSS 断言测的是真实层叠，而不是一个被简化过的理想 DOM。 */
 function scene() {
   return `<!doctype html><html><head><meta charset="utf-8"><style>${cssText}</style></head>
-<body style="margin:0"><div class="overlay-root"><div class="board">
-<button class="card card-back" id="back" style="width:76px;height:100px;transform:translate3d(0,0,0)">
-  <span class="card-inner card-back-inner"><span class="card-back-mark">?</span></span>
+<body style="margin:0"><div class="overlay-root" id="root"><div class="board">
+<button class="card card-back" id="back" style="width:76px;height:100px;transform:translate3d(150px,300px,0)">
+  <span class="card-inner card-back-inner" id="backInner" style="animation:card-in 220ms cubic-bezier(0.2, 0.8, 0.2, 1)"><span class="card-back-mark">?</span></span>
 </button>
 <button class="card card-face" id="face" style="width:76px;height:100px;transform:translate3d(200px,0,0)">
-  <span class="card-inner card-face-inner is-photo">
+  <span class="card-inner card-face-inner is-photo" id="faceInner">
     <img class="face-image" src="data:image/png;base64,iVBORw0KGgo=" alt="">
     <span class="face-name" style="top:58px;left:24px;width:76px">此电脑</span>
   </span>
@@ -562,30 +567,48 @@ test("PresenceController: 只派发三个回调、不碰 DOM、可 dispose", () 
   assert.match(f, /IDLE_MS\s*=\s*8000/, "空闲阈值常量为 8000ms");
 });
 
-test("摸鱼：.veiled 把正面翻回背面且不销毁正面 DOM", async () => {
-  const css = readFileSync(join(ROOT, "src/styles.css"), "utf8");
-  assert.match(css, /\.card\.veiled \.card-face-inner/, ".veiled 作用于卡面内层");
-  assert.match(css, /\.card\.veiled[\s\S]{0,120}rotateY\(180deg\)/, "翻回背面");
+test("摸鱼：veiled 加在 root 时正面真的翻回背面（真实层叠）", async () => {
   const out = await fresh(`(() => {
-    const face = document.getElementById('face');
-    face.classList.add('veiled');
-    return { stillThere: document.getElementById('face') !== null };
+    const root = document.getElementById('root');
+    const inner = document.getElementById('faceInner');
+    root.classList.add('veiled');
+    const cs = getComputedStyle(inner);
+    return { anim: cs.animationName, transform: cs.transform, dom: !!inner };
   })()`);
-  assert.ok(out.stillThere, "正面 DOM 不被销毁");
+  assert.ok(out.dom, "正面 DOM 不被销毁");
+  assert.equal(out.anim, "none", "失焦后卡面入场动画被取消");
+  assert.match(out.transform, /matrix3d\(-1/, "正面绕 Y 轴翻到背面（rotateY 180°）");
 });
 
-test("摸鱼：.hud-dozing 把 HUD 收成小金点且沿用 reduced-motion 块", () => {
-  const css = readFileSync(join(ROOT, "src/styles.css"), "utf8");
-  assert.match(css, /\.hud-dozing/, "存在 .hud-dozing 规则");
-  assert.match(css, /prefers-reduced-motion: reduce/, "沿用全局 reduced-motion 块");
+test("摸鱼：HUD 收成小金点后退出/静音按钮仍可点", async () => {
+  const out = await fresh(`(() => {
+    const dot = document.createElement('div');
+    dot.className = 'hud-wrap hud-dozing';
+    dot.innerHTML = '<div class="hud"><span class="hud-progress">x</span><button class="hud-button" id="b1"></button><button class="hud-button" id="b2"></button></div>';
+    document.body.appendChild(dot);
+    const hud = dot.querySelector('.hud');
+    const b2 = document.getElementById('b2');
+    const r = b2.getBoundingClientRect();
+    const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+    return { w: hud.getBoundingClientRect().width, hit: hit?.id ?? hit?.className ?? null };
+  })()`);
+  assert.ok(out.w <= 14, "HUD 收成小金点（≤14px）");
+  assert.equal(out.hit, "b2", "退出按钮（上层）仍命中自身，未被裁掉");
 });
 
-test("呼吸：.breathing 是一次性 1px 起伏、播完由 JS 移除、reduced-motion 直通", () => {
-  const css = readFileSync(join(ROOT, "src/styles.css"), "utf8");
-  assert.match(css, /@keyframes card-breathe/, "存在呼吸 keyframe");
-  const f = readFileSync(join(ROOT, "src/overlay.ts"), "utf8");
-  assert.match(f, /animationend/, "播完移除类靠 animationend 监听");
-  assert.match(f, /matchMedia\("\(prefers-reduced-motion: reduce\)"\)/, "reduced-motion 判定存在");
+test("呼吸/退出仪式：类规则能压过内联 card-in 入场动画", async () => {
+  const out = await fresh(`(() => {
+    const back = document.getElementById('back');
+    const inner = document.getElementById('backInner');
+    back.classList.add('revealing');
+    const reveal = getComputedStyle(inner).animationName;
+    back.classList.remove('revealing');
+    back.classList.add('breathing');
+    const breathe = getComputedStyle(inner).animationName;
+    return { reveal, breathe };
+  })()`);
+  assert.equal(out.reveal, "card-reveal", "revealing 真的播翻回动画");
+  assert.equal(out.breathe, "card-breathe", "breathing 真的播起伏动画");
 });
 
 test("摸鱼是纯视觉伪装：onHide/onShow 不发 IPC、不改游戏状态", () => {
@@ -598,35 +621,67 @@ test("摸鱼是纯视觉伪装：onHide/onShow 不发 IPC、不改游戏状态",
   assert.ok(!/api\.|invoke|emit|state-changed/.test(block), "Presence 接线块零 IPC / 零状态事件");
 });
 
-test("ExitChoreography: then 在动画完成回调里、cancel 阻止 then、reduced-motion 直通", () => {
-  const f = readFileSync(join(ROOT, "src/choreography.ts"), "utf8");
-  assert.match(f, /export class ExitChoreography/, "导出 ExitChoreography");
-  assert.match(f, /play\(then:/, "play 接收 then 回调");
-  assert.match(f, /cancel\(\)/, "暴露 cancel");
-  assert.match(f, /REVEAL_MS\s*=\s*1000/, "总时长常量 1000ms");
-  assert.match(f, /matchMedia\("\(prefers-reduced-motion: reduce\)"\)/, "reduced-motion 判定");
-  const playStart = f.indexOf("play(then:");
-  const cancelStart = f.indexOf("cancel():");
-  const playBlock = f.slice(playStart, cancelStart);
-  assert.match(playBlock, /setTimeout/, "then 由定时器延后执行");
-  assert.ok(!/^\s*then\(\);/m.test(playBlock), "then 不在点击同步路径里直接调用");
-  assert.match(f, /cardTimers/, "逐卡定时器被持有，cancel 才能清干净");
-  assert.match(f, /cardTimers\.push/, "逐卡定时器入册");
-  const cancelBlock = f.slice(cancelStart, f.indexOf("private finish()"));
-  assert.match(cancelBlock, /cardTimers/, "cancel 清理逐卡定时器");
+/** 在 CDP 页面里执行真源码：用 typescript 把 .ts 转译掉类型，去掉 export 后注入。
+ *  choreography.ts 无 import，只依赖 window，可直接这样跑真实实现而非复制品。 */
+async function choreographyBehaviorTest(expression) {
+  const tsSource = readFileSync(join(ROOT, "src/choreography.ts"), "utf8");
+  const js = ts.transpileModule(tsSource, {
+    compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext },
+  }).outputText.replace(/export /g, "");
+  return fresh(`(() => {
+    ${js}
+    ${expression}
+  })()`);
+}
+
+test("ExitChoreography 行为：cancel 后 then 绝不执行、逐卡类被清干净", async () => {
+  const out = await choreographyBehaviorTest(`
+    const card = document.getElementById('back');
+    let fired = 0;
+    const c = new ExitChoreography([card]);
+    c.play(() => { fired++; });
+    c.cancel();
+    return new Promise((resolve) => setTimeout(() => resolve({
+      fired,
+      revealing: card.classList.contains('revealing'),
+    }), 1200));
+  `);
+  assert.equal(out.fired, 0, "cancel 阻止 then");
+  assert.equal(out.revealing, false, "逐卡 timer 清干净，类没被加回来");
 });
 
-test("退出仪式与图标滑行：CSS 类与三个按钮接线齐全", () => {
-  const css = readFileSync(join(ROOT, "src/styles.css"), "utf8");
-  assert.match(css, /@keyframes card-reveal/, "存在翻回 keyframe");
-  assert.match(css, /\.sliding/, "存在滑行类");
+test("ExitChoreography 行为：动画演完 then 执行一次", async () => {
+  const out = await choreographyBehaviorTest(`
+    const card = document.getElementById('back');
+    let fired = 0;
+    const c = new ExitChoreography([card]);
+    c.play(() => { fired++; });
+    return new Promise((resolve) => setTimeout(() => resolve({ fired }), 1200));
+  `);
+  assert.equal(out.fired, 1, "then 由完成回调执行且只一次");
+});
+
+test("动画期间 Esc 可取消（onKeyDown 不在 pending 时直接 return）", () => {
+  const f = readFileSync(join(ROOT, "src/overlay.ts"), "utf8");
+  const start = f.indexOf("private onKeyDown(");
+  const end = f.indexOf("private trapFocus(");
+  const block = f.slice(start, end);
+  assert.match(block, /cancelExit\(\)/, "onKeyDown 有取消动画的分支");
+  const guard = block.slice(0, block.indexOf("cancelExit()"));
+  assert.ok(!/if \(this\.pending\) return;/.test(guard) || /cancelExit\(\)/.test(guard),
+    "pending 时不是无条件 return（否则动画中 Esc 永远到不了取消）");
+});
+
+test("退出仪式：三个按钮仍调原命令、runExit 内部零 IPC", () => {
   const f = readFileSync(join(ROOT, "src/overlay.ts"), "utf8");
   assert.match(f, /new ExitChoreography/, "创建了编排器");
-  assert.match(f, /\.play\(/, "存在 play 调用");
-  assert.match(f, /\.cancel\(\)/, "存在 cancel 调用");
   assert.match(f, /api\.quitApp\(\)/, "退出仍调 quit_app");
   assert.match(f, /\.\s*restoreAndExit\(\)/, "回到原布局仍调 restoreAndExit");
   assert.match(f, /\.\s*saveAndExit\(\)/, "保存仍调 saveAndExit");
+  const start = f.indexOf("private runExit(");
+  const end = f.indexOf("private cancelExit()");
+  const block = f.slice(start, end);
+  assert.ok(!/api\.|invoke|emit/.test(block), "runExit 内部零 IPC");
 });
 
 test("硬边界：后端零改动、动画期间零游戏命令", () => {

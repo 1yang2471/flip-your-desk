@@ -10,7 +10,7 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "check": "tsc --noEmit",
-    "test": "node tests/ui.test.mjs",
+    "test": "npm run build && node tests/ui.test.mjs",
     "exe": "scripts\\run-tauri-build.cmd",
     "dev:tauri": "scripts\\run-tauri-dev.cmd"
   },

@@ -36,7 +36,9 @@
 - **C1 摸鱼模式**：窗口失焦 → 所有翻开的正面视觉盖上、HUD 收成小金点；重新获得焦点 → **自动原样恢复**，游戏状态一字不改（步数、进度、已翻开的卡、拖拽中的卡都不动）。用户明确选定「自动原样恢复」，不引入额外点击、不加配置开关。
 - **C2 呼吸间隔**：连续 8 秒无任何操作（常量 `IDLE_MS = 8000`，不进设置），卡背极慢起伏一次（1px 级），不弹任何东西。
 - **C4 退出仪式**：Esc 退出确认里点「退出」（`quit_app`）、以及结算里点「回到原布局」（`restoreAndExit`）时，卡背按 y/x 排序依次翻回真图标（多米诺，总时长常量 `REVEAL_MS = 1000`），**演完才**调对应命令。局中退出确认只调 `quit_app`（已核实 `overlay.ts`）；`restoreAndExit` 属于结算弹窗而非退出确认。
-- **A4（降级版）图标滑行**：结算里点「保存新布局」（`saveAndExit`）时，覆盖层里的**假图标**先滑到目标槽位再淡出，**演完才**调 `saveAndExit`。真实桌面恢复与写回仍由现有命令原样执行。结算里「再来一局」不演动画，保持原样。
+- **A4（最终降级版）：只保留时序，不做滑行**：结算里点「保存新布局」（`saveAndExit`）时，同样走 C4 的多米诺演出，**演完才**调 `saveAndExit`；**不做假图标滑行**。真实桌面恢复与写回仍由现有命令原样执行。结算里「再来一局」不演动画，保持原样。
+
+> 修订记录（2026-11-14 审查后）：初版 A4 写了「假图标滑到目标槽位再淡出」，但实测发现 `--slide-x/--slide-y` 无 JS 赋值、且卡片定位靠内联 `transform` 压过 `.sliding` 类规则，滑行在真实 DOM 下既不滑也不淡。经用户拍板，**整项砍掉假滑行**（`.sliding` 类、`slide` 参数、`--slide-*` 变量全部移除），只保留「演完才发命令」这一有实际价值的语义。
 
 **明确不做**
 
@@ -44,6 +46,7 @@
 - 任何新玩法模式、任何新持久化设置、任何新 IPC 命令、任何 i18n 新文案、任何音效新素材、任何新依赖
 - **`src-tauri/**` 全部零改动**：`game.rs` / `lib.rs` / `platform/*` / `model.rs` 一行不动
 - A4 的"真图标滑到新位置"版本（需改 `save_and_exit` 调用时序）
+- A4 的"假图标滑行/淡出"版本（实测无效，已整项移除）
 
 ## 硬边界
 
@@ -97,56 +100,61 @@ reduced-motion 或 失焦(.veiled) 期间不触发
 用户点「退出」(quit_app) /「回到原布局」(restoreAndExit) /「保存新布局」(saveAndExit)
   → 按钮立即置 pending（沿用现有防重入）
   → choreography.play(then)
-       ├ 每屏覆盖层按 y/x 排序（复用现有 buildBoard 的排序思路）依次加 .revealing
-       ├ A4（仅保存）：假图标从当前槽位滑/淡到目标槽位；C4：只翻回
+       ├ 取牌桌全部 .card（不只 backs：结算时多数槽位已是正面），按 slot 的 y/x 排序
+       ├ 依次加 .revealing 演多米诺翻回
        └ 全部完成（REVEAL_MS = 1000ms，reduced-motion 下 0ms）
   → then() 才调用对应原有的 quit_app / restoreAndExit / saveAndExit
 ```
 
-**取消路径**：动画中按 Esc / 点「继续玩」/ 点别的按钮 → `cancel()` 移除所有类、恢复 DOM、`pending` 归位，`then()` 不执行。
+**取消路径**：动画中按 Esc → `onKeyDown` 在 `pending && choreography` 时走 `cancelExit()`；退出确认层在动画期间保留一个「继续玩」按钮作为可见取消入口，点它也走 `cancelExit()`。`cancel()` 移除所有类、清主/逐卡定时器、`pending` 归位，`then()` 不执行。
 
 **错误路径（沿用现有，不动）**：`saveAndExit` 失败时前端已有 `showBusy(..., true)` 与重试；`then()` 发出后覆盖窗由后端 `app.exit(0)` 或错误弹窗接管，不产生「演完了又退回牌桌」的错乱。
 
 ## 测试与回归
 
-现有门：`npm test`（`tests/ui.test.mjs`，38 条，读源码做静态断言）+ Rust 三门。后端零改动，Rust 门**不新增任何断言**，只证明不回归。
+现有门：`npm test`（`tests/ui.test.mjs`，原 38 条，headless Edge + CDP 打开真实构建 CSS 注入 DOM 场景）+ Rust 三门。后端零改动，Rust 门**不新增任何断言**，只证明不回归。
 
-**新增前端测试（沿用现有读源码断言风格，不引入浏览器自动化）**
-
-- C1：`.veiled` 存在且只作用于视觉层；`focus`/`onShow` 路径不调用 `api.*`、不 emit `state-changed`；正面 DOM 不被 `remove()`
-- C2：`.breathing` 播完自动移除；`reduced-motion` 分支存在；失焦期间不触发
-- C4/A4：`then()` 在动画完成回调里、不在点击同步路径里；`cancel()` 清类且阻止 `then()`；`pending` 取消后归位
-- 硬边界回归（防未来有人把动画塞回后端）：断言 `src-tauri/` 未出现新的动画/延迟标记；`save_and_exit` / `restore_and_exit` 函数体与本次基线一致（沿用现有 `windows.rs` 源码断言的同款手法）
+> 测试修订（2026-11-14 审查后）：初版新增的 8 条断言几乎全是 `readFileSync` 查源码字符串，被 `@tester` 独立审查判定为**假阳性**——最典型的是 `.veiled` 用例只断言 DOM 恒在、还把类加在与生产相反的 `.card` 上，恰好绕开了真实缺陷。现改为**基于 `getComputedStyle` 与真实行为的断言**：
+> - `scene()` 忠实复刻生产 DOM（veiled 加在 `.overlay-root`、back-inner 带内联 `card-in`、卡片带内联定位 transform）
+> - C1：`veiled` 加在 root 后断言 `animationName === "none"` 且 transform 是 `rotateY(180°)` 的 matrix3d；HUD dozing 后断言退出按钮 `elementFromPoint` 命中自身
+> - C2/C4：内联 `card-in` 存在时断言 `.revealing`/`.breathing` 的 computed `animationName` 真是 `card-reveal`/`card-breathe`
+> - `ExitChoreography`：用 `typescript.transpileModule` 把**真源码**注入 CDP 页面执行，断言 `play→cancel→then 未调用`、`play→完成→then 执行一次`
+> - S4：断言 `onKeyDown` 在 pending 时有 `cancelExit()` 分支而非无条件 return
+> - 硬边界回归：断言 `src-tauri/` 未出现动画/空闲标记、`runExit` 内部零 IPC
+> - `package.json` 的 `test` 脚本前置 `npm run build`（clean clone 可直接跑）；`ci.yml` 与 `release.yml` 均补 `npm test` 步骤
 
 **验收标准（可量化）**
 
 1. `npm run check` + `npm test` 全绿，测试条数 ≥ 38 + 新增项
 2. `cargo fmt --check` / `cargo test`（38 passed, 1 ignored）/ `cargo clippy --all-targets -- -D warnings` 与基线完全一致
-3. 真机手验 4 条（本机 Windows 可做，无需新设备）：失焦→盖正面→切回原样恢复；空闲 8s 呼吸一次；Esc 退出多米诺后图标真的回来；结算保存时假图标滑行后桌面真的按新布局排列
-4. 手验补充：`prefers-reduced-motion` 开启时四个动画全部直通、功能不变；动画中点「继续玩」能干净取消
+3. 真机手验 6 条（本机 Windows 可做，无需新设备）：失焦→盖正面→切回原样恢复；空闲 8s 呼吸一次；拖拽中途失焦不卡半空；Esc 退出多米诺后图标真的回来；结算保存后桌面真的按新布局排列；退出动画期间点「继续玩」/按 Esc 能干净取消
+4. 手验补充：`prefers-reduced-motion` 开启时动画全部直通、功能不变
 
 **风险与缓解**
 
 - C1 与现有拖拽 `blur→cancel` 监听打架 → C1 只加/移 CSS 类，不注册第二个 `blur` 处理器，统一由 `PresenceController` 派发
-- A4 假图标淡出与真图标恢复之间有「一瞬间空档」 → 假图标淡出与 `saveAndExit` 调用同帧衔接；真图标恢复本就由后端 `restore_desktop_icons()` 在写回前完成
+- 内联 `style.animation`（发牌入场）优先级压过类规则 → 入场动画播完由 `animationend` 清掉内联；同时 CSS 侧对 `.revealing`/`.breathing`/`.veiled` 用 `!important` 兜底
+- 结算时 `backs` 多为正面导致多米诺无卡可演 → `runExit` 从 `board.querySelectorAll(".card")` 取全部卡片按 slot 排序
 
 ## 落地文件与提交边界
 
 | 文件 | 改动 |
 |---|---|
 | `src/presence.ts`（新） | `PresenceController`，仅事件 → 3 回调 |
-| `src/choreography.ts`（新） | `ExitChoreography`，`play(then)` / `cancel()` |
-| `src/overlay.ts` | 两处接线：初始化 Presence、退出/保存按钮的 `then` 包进 choreography |
-| `src/styles.css` | `.veiled` / `.hud-dozing` / `.breathing` / `.revealing` 四组类 + reduced-motion 覆盖 |
-| `tests/ui.test.mjs` | 新增断言 |
+| `src/choreography.ts`（新） | `ExitChoreography`，`play(then)` / `cancel()`（无 slide 参数） |
+| `src/overlay.ts` | 初始化 Presence、三个按钮的 `then` 包进 choreography、`onKeyDown` 取消分支、发牌入场动画播完清内联 |
+| `src/styles.css` | `.veiled` / `.hud-dozing` / `.breathing` / `.revealing` 四组类（`!important` 压内联）+ reduced-motion 覆盖；**无 `.sliding`** |
+| `tests/ui.test.mjs` | 新增基于 `getComputedStyle` / 真源码转译执行的断言，`scene()` 复刻生产 DOM |
+| `package.json` | `test` 脚本前置 `npm run build` |
+| `.github/workflows/ci.yml` / `release.yml` | 各补一步 `npm test` |
 
-**明确不碰**：`src-tauri/**`（全部）、`src/audio.ts`、`src/i18n.ts` + `src/locales/*`（零新文案）、`src/launcher.ts`、`src/types.ts` / `src/api.ts`（零新 IPC）、`package.json` / `tauri.conf.json`（零新依赖）、六处版本号（不发版）。
+**明确不碰**：`src-tauri/**`（全部）、`src/audio.ts`、`src/i18n.ts` + `src/locales/*`（零新文案）、`src/launcher.ts`、`src/types.ts` / `src/api.ts`（零新 IPC）、`tauri.conf.json`（零新依赖）、六处版本号（不发版）。
 
 **提交边界**：一个中文 conventional commit，**只 commit 不 push**，不 bump 版本、不打 tag、不发版；提交前本地跑全套门并贴原样输出，`git log --oneline` 贴原文核对。
 
 ## YAGNI 复查
 
-砍掉了 A3、A1、A5、B/D 全部点子、新设置项、新 IPC、新文案、新音效、后端改动、A4 真图标滑行。剩下四个点子共用一个活跃度控制器与一个动画编排器，无投机性扩展、无可配置化、无未要求的抽象。
+砍掉了 A3、A1、A5、B/D 全部点子、新设置项、新 IPC、新文案、新音效、后端改动、A4 真图标滑行、**A4 假图标滑行**（实测无效）。剩下四个点子共用一个活跃度控制器与一个动画编排器，无投机性扩展、无可配置化、无未要求的抽象。
 
 ## 决策记录（本轮四轮收敛）
 

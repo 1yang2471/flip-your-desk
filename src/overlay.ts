@@ -247,7 +247,14 @@ export class OverlayGame {
       this.ensureBack(slot);
       const delay = Math.min(index * 16, 560);
       const inner = this.backs.get(slot.id)?.querySelector<HTMLElement>(".card-back-inner");
-      if (inner) inner.style.animation = `card-in 220ms var(--ease) ${delay}ms backwards`;
+      if (inner) {
+        inner.style.animation = `card-in 220ms var(--ease) ${delay}ms backwards`;
+        // 入场动画播完立刻清掉内联声明：它优先级高于类规则，不清会永久
+        // 压住后续的 .breathing / .revealing 动画。
+        inner.addEventListener("animationend", () => {
+          inner.style.animation = "";
+        }, { once: true });
+      }
       if (this.view.isPrimary) {
         this.dealTimers.push(
           window.setTimeout(() => this.sounds.dealTick(), delay + 200),
@@ -308,14 +315,18 @@ export class OverlayGame {
     }
   }
 
-  /** 按 y/x 排序取所有卡背元素，交给编排器；动画期间不发任何游戏命令。 */
-  private runExit(then: () => void, slide = false): void {
-    const ordered = [...this.view.slots].sort((a, b) => a.y - b.y || a.x - b.x);
-    const cards = ordered
-      .map((slot) => this.backs.get(slot.id))
-      .filter((el): el is HTMLButtonElement => el !== undefined);
+  /** 按 y/x 排序取牌桌全部卡片（结算时多数槽位已是正面，不能只取 backs），
+   *  交给编排器演多米诺；动画期间不发任何游戏命令。 */
+  private runExit(then: () => void): void {
+    const order = new Map<number, number>();
+    [...this.view.slots]
+      .sort((a, b) => a.y - b.y || a.x - b.x)
+      .forEach((slot, index) => order.set(slot.id, index));
+    const cards = [...this.board.querySelectorAll<HTMLElement>(".card")].sort(
+      (a, b) => (order.get(Number(a.dataset.slot)) ?? 0) - (order.get(Number(b.dataset.slot)) ?? 0),
+    );
     this.choreography = new ExitChoreography(cards);
-    this.choreography.play(then, slide);
+    this.choreography.play(then);
   }
 
   /** 动画中用户反悔：移除类、pending 归位，then 不会执行。 */
@@ -341,7 +352,15 @@ export class OverlayGame {
   }
 
   private onKeyDown(event: KeyboardEvent): void {
-    if (this.pending) return;
+    // 动画期间 pending 为真，但 Esc 仍要能取消演出（spec 硬边界 #3）。
+    // 不能无条件 return，否则 cancel 在真实交互里永远不可达。
+    if (this.pending) {
+      if (event.key === "Escape" && this.choreography) {
+        event.preventDefault();
+        this.cancelExit();
+      }
+      return;
+    }
     if (event.key === "Tab" && (this.resultOpen || this.exitOpen)) {
       const container = this.resultOpen ? this.resultLayer : this.exitLayer;
       this.trapFocus(container, event);
@@ -513,6 +532,9 @@ export class OverlayGame {
       element.setAttribute("aria-label", t(this.lang, "overlay.cardBackAria"));
       element.addEventListener("click", () => this.onBackClick(slot.id));
       inner.style.animation = "card-in 220ms cubic-bezier(0.2, 0.8, 0.2, 1)";
+      inner.addEventListener("animationend", () => {
+        inner.style.animation = "";
+      }, { once: true });
       this.board.appendChild(element);
       this.backs.set(slot.id, element);
     }
@@ -1045,7 +1067,7 @@ export class OverlayGame {
               console.error("save failed", payload);
               this.showBusy(panel, errorText(this.lang, payload.code), true);
             });
-        }, true);
+        });
       });
       actions.appendChild(save);
 
@@ -1173,11 +1195,24 @@ export class OverlayGame {
     quit.addEventListener("click", () => {
       if (this.pending) return;
       this.pending = true;
-      // 直接关层，不走 hideExitConfirm()：后者会 cancelExit() 干掉刚启动的动画。
-      this.exitOpen = false;
-      this.exitLayer.hidden = true;
+      // 保留退出层，把内容换成「继续玩」作为动画期间的可见取消入口：
+      // 点它 -> hideExitConfirm() -> cancelExit()，Esc 也走同一路径。
       clear(this.exitLayer);
-      this.runExit(() => void api.quitApp());
+      const cancelPanel = h("div", "modal modal-compact");
+      cancelPanel.setAttribute("role", "dialog");
+      const cancel = h("button", "primary-button");
+      cancel.type = "button";
+      cancel.appendChild(h("span", "", t(this.lang, "exit.keep")));
+      cancel.addEventListener("click", () => this.hideExitConfirm());
+      cancelPanel.appendChild(cancel);
+      this.exitLayer.appendChild(cancelPanel);
+      this.runExit(() => {
+        void api.quitApp().catch((error) => {
+          this.pending = false;
+          this.choreography = null;
+          this.toast(errorText(this.lang, asAppError(error).code));
+        });
+      });
     });
     actions.appendChild(quit);
     panel.appendChild(actions);

@@ -1,6 +1,8 @@
 # 桌面呼吸 Implementation Plan · 续篇（Task 4–5）
 
-> 本文件是 [2026-11-14-desktop-breathing.md](2026-11-14-desktop-breathing.md) 的续篇，合起来是一份完整计划。Header（Goal / Architecture / Tech Stack）、现状说明、File Structure 与 Task 1–3 见主文件；按 pre-commit 的 20KB 文件约束拆分。继续用 checkbox 逐项执行。
+> 本文件是 [2026-11-14-desktop-breathing.md](2026-11-14-desktop-breathing.md) 的续篇，合起来是一份完整计划。Header（Goal / Architecture / Tech Stack）、现状说明、File Structure 与 Task 1–3 见主文件；按 pre-commit 的 20KB 文件约束拆分。
+>
+> **⚠ 后续修订（2026-11-14 审查后）**：本 Task 4 里 `.sliding` / `slide` 参数 / `--slide-*` 那部分**已整项砍掉**（实测假滑行无效），新增的源码字符串断言也已改为真实 `getComputedStyle` / 行为断言。下方正文保留为历史记录，**不要再照抄执行**；以 [spec 修订版](../specs/2026-11-14-desktop-breathing-design.md) 与实际代码为准。
 
 ---
 
