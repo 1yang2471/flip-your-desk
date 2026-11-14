@@ -555,6 +555,7 @@ export class OverlayGame {
       element.type = "button";
       element.dataset.icon = String(icon.id);
       element.dataset.slot = String(slotId);
+      element.dataset.tone = slot.tone;
       const inner = h("span", "card-inner card-face-inner");
       if (icon.image) {
         // 透明卡面：全格画布已把图标摆回格内原位，名字按桌面标签排版，

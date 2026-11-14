@@ -21,6 +21,27 @@
   --card-dark-border: rgba(255, 255, 255, 0.16);
   --card-light: rgba(246, 242, 232, 0.97);
   --card-light-border: rgba(28, 26, 22, 0.16);
+  /* 扑克牌背四角金点：真卡背与摸鱼盖牌共用一套，避免两处漂移。 */
+  --card-corner-dots: radial-gradient(
+      circle at 8px 8px,
+      var(--accent) 0 1.5px,
+      transparent 2px
+    ),
+    radial-gradient(
+      circle at calc(100% - 8px) 8px,
+      var(--accent) 0 1.5px,
+      transparent 2px
+    ),
+    radial-gradient(
+      circle at 8px calc(100% - 8px),
+      var(--accent) 0 1.5px,
+      transparent 2px
+    ),
+    radial-gradient(
+      circle at calc(100% - 8px) calc(100% - 8px),
+      var(--accent) 0 1.5px,
+      transparent 2px
+    );
   --hairline: rgba(255, 255, 255, 0.08);
   --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
   --font: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", "PingFang SC",
@@ -168,6 +189,10 @@ button {
   color: var(--accent-deep);
 }
 
+.brand-text {
+  min-width: 0;
+}
+
 .brand-name {
   display: block;
   font-size: 15px;
@@ -180,12 +205,16 @@ button {
   margin-top: 1px;
   font-size: 12px;
   color: var(--text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .head-actions {
   display: flex;
   align-items: center;
   gap: 4px;
+  flex: 0 0 auto;
 }
 
 .icon-button {
@@ -214,6 +243,7 @@ button {
   font-size: 12px;
   font-weight: 500;
   border-color: var(--ink-700);
+  white-space: nowrap;
 }
 
 .status-panel {
@@ -740,26 +770,7 @@ button {
   position: absolute;
   inset: 0;
   pointer-events: none;
-  background-image: radial-gradient(
-      circle at 8px 8px,
-      var(--accent) 0 1.5px,
-      transparent 2px
-    ),
-    radial-gradient(
-      circle at calc(100% - 8px) 8px,
-      var(--accent) 0 1.5px,
-      transparent 2px
-    ),
-    radial-gradient(
-      circle at 8px calc(100% - 8px),
-      var(--accent) 0 1.5px,
-      transparent 2px
-    ),
-    radial-gradient(
-      circle at calc(100% - 8px) calc(100% - 8px),
-      var(--accent) 0 1.5px,
-      transparent 2px
-    );
+  background-image: var(--card-corner-dots);
 }
 
 .card-face-inner {
@@ -1220,10 +1231,51 @@ button {
 }
 
 /* 桌面呼吸：C1 摸鱼 —— 失焦时正面视觉盖上（DOM 不销毁），HUD 收成小金点。
-   veiled 由 overlay.ts 加在 .overlay-root 上，选择器必须写在这里，不能写 .card.veiled。 */
+   veiled 由 overlay.ts 加在 .overlay-root 上，选择器必须写在这里，不能写 .card.veiled。
+   注意：不能用 rotateY 翻转来"盖回背面"——.card-face-inner 有 transform-style:
+   preserve-3d，翻 180° 后子元素背面照样渲染，会出现镜像图标/文字。改为隐藏卡面
+   内容，并在卡片上重画一个卡背。 */
 .overlay-root.veiled .card-face-inner {
-  transform: rotateY(180deg) !important;
-  animation: none !important;
+  visibility: hidden !important;
+}
+
+.overlay-root.veiled .card-face::before {
+  content: "?";
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  border-radius: 12px;
+  background-color: var(--card-dark);
+  border: 1px solid var(--card-dark-border);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.28);
+  color: var(--text-1);
+  font-size: 22px;
+  font-weight: 500;
+  background-image: var(--card-corner-dots);
+}
+
+/* 扑克牌内框：与 .card-back-inner::after 同款。 */
+.overlay-root.veiled .card-face::after {
+  content: "";
+  position: absolute;
+  inset: 3px;
+  z-index: 2;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 9px;
+  pointer-events: none;
+}
+
+.overlay-root.veiled .card-face[data-tone="light"]::before {
+  background-color: var(--card-light);
+  border-color: var(--card-light-border);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.24);
+  color: #12151a;
+}
+
+.overlay-root.veiled .card-face[data-tone="light"]::after {
+  border-color: rgba(28, 26, 22, 0.16);
 }
 
 .hud-wrap.hud-dozing .hud {

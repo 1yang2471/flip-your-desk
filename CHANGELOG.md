@@ -9,7 +9,8 @@ All notable changes to this project are documented here.
   - Idle breathing: after 8 seconds without input the card backs give a single 1px bob
   - Exit ritual: quitting (Esc confirm) or restoring the original layout plays a card-by-card domino and only runs the real command once it finishes; the animation is cancellable via Esc or the visible "keep playing" button
   - Saving a new layout keeps the same "animate, then run the real command" ordering (the fake icon slide was dropped: it had no effect under the real CSS)
-- Fixed the desktop-presence CSS so the veil/breathing/domino rules actually beat the inline deal-in animation (the first cut silently did nothing on the real DOM)
+- Fixed the desktop-presence CSS so breathing/domino actually play (they were losing to the inline deal-in animation); the doze veil now hides the face content and repaints a card back on the card instead of flipping it (a rotateY flip left mirrored icon/text visible, because the face inner uses `transform-style: preserve-3d`)
+- Fixed the launcher header: the language button no longer stacks "中文" vertically and the tagline stays on one line, so the status panel no longer shows a needless scrollbar
 - Frontend regression tests now assert real computed styles and real module behavior instead of source-string matches; `npm test` builds first, and CI/release run it
 
 ## 0.2.0

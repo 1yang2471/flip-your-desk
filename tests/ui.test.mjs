@@ -39,7 +39,21 @@ function scene() {
     <span class="face-name" style="top:58px;left:24px;width:76px">此电脑</span>
   </span>
 </button>
-</div></div></body></html>`;
+</div></div>
+<div id="launcherProbe" style="width:540px">
+<header class="launcher-head">
+  <div class="brand"><span class="brand-mark"><span class="brand-mark-glyph">?</span></span>
+    <div class="brand-text"><strong class="brand-name">Flip Your Desk</strong><span class="brand-tagline" id="tagline">A memory game played on your own desktop icons</span></div></div>
+  <div class="head-spacer"></div>
+  <div class="head-actions" id="headActions">
+    <button class="icon-button lang-button" id="langBtn" type="button">中文</button>
+    <button class="icon-button" type="button">M</button>
+    <button class="icon-button" type="button">-</button>
+    <button class="icon-button" type="button">X</button>
+  </div>
+</header>
+</div>
+</body></html>`;
 }
 
 const dir = mkdtempSync(join(tmpdir(), "fyd-ui-"));
@@ -567,17 +581,25 @@ test("PresenceController: 只派发三个回调、不碰 DOM、可 dispose", () 
   assert.match(f, /IDLE_MS\s*=\s*8000/, "空闲阈值常量为 8000ms");
 });
 
-test("摸鱼：veiled 加在 root 时正面真的翻回背面（真实层叠）", async () => {
+test("摸鱼：veiled 时正面内容隐藏 + 重画卡背（真实层叠）", async () => {
   const out = await fresh(`(() => {
     const root = document.getElementById('root');
+    const face = document.getElementById('face');
     const inner = document.getElementById('faceInner');
     root.classList.add('veiled');
     const cs = getComputedStyle(inner);
-    return { anim: cs.animationName, transform: cs.transform, dom: !!inner };
+    const before = getComputedStyle(face, '::before');
+    return {
+      dom: !!inner,
+      visibility: cs.visibility,
+      beforeContent: before.content,
+      beforePosition: before.position,
+    };
   })()`);
   assert.ok(out.dom, "正面 DOM 不被销毁");
-  assert.equal(out.anim, "none", "失焦后卡面入场动画被取消");
-  assert.match(out.transform, /matrix3d\(-1/, "正面绕 Y 轴翻到背面（rotateY 180°）");
+  assert.equal(out.visibility, "hidden", "卡面内容（图标/名字）被隐藏，不再出现镜像");
+  assert.match(out.beforeContent, /\?/, "卡片上重画了一个卡背（?）");
+  assert.equal(out.beforePosition, "absolute", "卡背覆盖层定位在卡片上");
 });
 
 test("摸鱼：HUD 收成小金点后退出/静音按钮仍可点", async () => {
@@ -694,6 +716,22 @@ test("硬边界：后端零改动、动画期间零游戏命令", () => {
   const end = f.indexOf("private cancelExit()");
   const block = f.slice(start, end);
   assert.ok(!/api\.|invoke|emit/.test(block), "runExit 内部零 IPC");
+});
+
+test("启动窗 header：语言按钮与 tagline 不换行、按钮组不收缩", async () => {
+  const out = await fresh(`(() => {
+    const lang = document.getElementById('langBtn');
+    const tagline = document.getElementById('tagline');
+    const actions = document.getElementById('headActions');
+    return {
+      langH: Math.round(lang.getBoundingClientRect().height),
+      taglineWS: getComputedStyle(tagline).whiteSpace,
+      actionsShrink: getComputedStyle(actions).flexShrink,
+    };
+  })()`);
+  assert.ok(out.langH <= 34, `语言按钮单行不竖排（实测高 ${out.langH}px）`);
+  assert.equal(out.taglineWS, "nowrap", "tagline 单行，不再折成两行撑高头部");
+  assert.equal(out.actionsShrink, "0", "按钮组不被压缩");
 });
 
 let failed = 0;
