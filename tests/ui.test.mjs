@@ -547,6 +547,21 @@ test("Fences 提示：organizerDetected 非阻塞，文案双语就位", () => {
   assert.match(model, /organizer_detected/, "EnvReport 含 organizer_detected");
 });
 
+test("PresenceController: 只派发三个回调、不碰 DOM、可 dispose", () => {
+  const f = readFileSync(join(ROOT, "src/presence.ts"), "utf8");
+  assert.match(f, /export class PresenceController/, "导出 PresenceController");
+  assert.match(f, /onHide\?:/, "构造参数含 onHide");
+  assert.match(f, /onShow\?:/, "构造参数含 onShow");
+  assert.match(f, /onIdle\?:/, "构造参数含 onIdle");
+  assert.match(f, /resetIdle\(\)/, "暴露 resetIdle");
+  assert.match(f, /dispose\(\)/, "暴露 dispose");
+  assert.match(f, /addEventListener\("blur"/, "监听 blur");
+  assert.match(f, /addEventListener\("focus"/, "监听 focus");
+  assert.match(f, /addEventListener\("visibilitychange"/, "监听 visibilitychange");
+  assert.ok(!/querySelector|classList|createElement|appendChild/.test(f), "PresenceController 不操作 DOM");
+  assert.match(f, /IDLE_MS\s*=\s*8000/, "空闲阈值常量为 8000ms");
+});
+
 let failed = 0;
 try {
   await start();

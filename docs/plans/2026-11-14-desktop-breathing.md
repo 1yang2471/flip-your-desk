@@ -64,7 +64,7 @@ test("PresenceController: 只派发三个回调、不碰 DOM、可 dispose", () 
   assert.match(f, /addEventListener\("blur"/, "监听 blur");
   assert.match(f, /addEventListener\("focus"/, "监听 focus");
   assert.match(f, /addEventListener\("visibilitychange"/, "监听 visibilitychange");
-  assert.ok(!/document\.|querySelector|classList/.test(f), "PresenceController 不碰 DOM");
+  assert.ok(!/querySelector|classList|createElement|appendChild/.test(f), "PresenceController 不操作 DOM");
   assert.match(f, /IDLE_MS\s*=\s*8000/, "空闲阈值常量为 8000ms");
 });
 ```
