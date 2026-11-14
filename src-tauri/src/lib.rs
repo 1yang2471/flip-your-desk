@@ -168,12 +168,20 @@ fn close_overlays(app: &AppHandle, count: usize) {
 
 /// 把覆盖层钉在桌面层（Progman 正上方）：桌面之上、所有普通窗口之下。
 fn pin_overlays(app: &AppHandle, count: usize) {
+    // hwnd() 是 tauri 的 Windows-only API；非 Windows 平台层暂无钉层实现，空操作。
+    #[cfg(windows)]
     for index in 0..count {
         if let Some(window) = app.get_webview_window(&format!("overlay-{index}")) {
             if let Ok(hwnd) = window.hwnd() {
                 let _ = platform::pin_window_over_desktop(hwnd.0 as isize);
             }
         }
+    }
+    #[cfg(not(windows))]
+    {
+        // 非 Windows 平台层暂无钉层实现，调用保持接缝面对称（unsupported 返回 unsupported_platform）。
+        let _ = (app, count);
+        let _ = platform::pin_window_over_desktop(0);
     }
 }
 

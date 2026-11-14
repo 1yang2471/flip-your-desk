@@ -37,3 +37,30 @@ jobs:
 
       - name: Lint backend
         run: cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings
+
+  # 非 Windows 分支（platform/unsupported.rs 与 lib.rs 的 cfg）持续过编译。
+  # 在 Linux runner 上跑 host check：tauri 的 Linux 原生依赖（dbus/gtk/webkit）
+  # 需要系统库，windows runner 上做 Linux cross check 会被 pkg-config 卡住。
+  linux-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Linux system dependencies (Tauri v2 prerequisites)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev
+
+      - name: Check non-Windows Rust code
+        run: cargo check --manifest-path src-tauri/Cargo.toml

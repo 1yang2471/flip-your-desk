@@ -1,7 +1,8 @@
 # macOS / Linux 移植调研计划 · 2026-11-14
 
-状态：调研计划（未实施；本文档不改任何代码）· 前置：v0.1.1 已发布 · 范围：`src-tauri/src/platform/` 平台适配层
+状态：调研计划（Phase 0 已于 2026-11-14 实施，落地形态见 [Phase 0 实施记录](2026-11-14-phase0-implementation.md)）· 前置：v0.1.1 已发布 · 范围：`src-tauri/src/platform/` 平台适配层
 来源标注：`[S#]` 对应文末来源列表；查不到可靠来源的结论一律标注"未核实/需实测"。
+实测更正：本文初稿的 Phase 0 有两处落地假设被后续实测否证（trait 收敛、windows CI 跑 Linux cross check），已在正文标注并以文末实施记录为准。
 
 ---
 
@@ -32,7 +33,9 @@
 | `pin_window_over_desktop(hwnd)` | 覆盖窗 z 序钉到桌面之上 | SetWindowPos 对 Progman | macOS 需 NSPanel；Wayland 受限 |
 | `detect_desktop_organizers()` | Fences 类探测（非阻塞） | 进程快照 | 各平台可留 false |
 
-数据结构：`ProbeData` / `Captured{icons,label_font}` / `ApplyReport`，输入输出均为纯数据（`IconRecord`/`IconWrite`/`MonitorInfo`），不含任何 Win32 类型——**接缝面本身是干净的，移植量集中在 7 个函数的平台实现**。
+数据结构：`ProbeData` / `Captured{icons,label_font}` / `ApplyReport`，输入输出均为纯数据（`IconRecord`/`IconWrite`/`MonitorInfo`），不含任何 Win32 类型——**移植量集中在 7 个函数的平台实现**。
+
+> 实测更正（2026-11-14）：接缝面有两处不干净——`pin_window_over_desktop(hwnd: isize)` 的句柄类型泄漏、`lib.rs` 的 `window.hwnd()` 是 Windows-only API 导致非 Windows 无法编译。详见 [Phase 0 实施记录](2026-11-14-phase0-implementation.md)。
 
 ### 目标
 
@@ -85,13 +88,15 @@
 
 ## 分阶段计划
 
-### Phase 0：平台层 trait 收敛（只动 Windows 能跑的部分，0 新功能）
+### Phase 0：打通跨编译门（只动 Windows 能跑的部分，0 新功能）
 
-1. `platform/mod.rs` 的 7 个自由函数收敛为 trait（如 `trait DesktopPlatform`），`windows.rs` / `unsupported.rs` 改为实现该 trait，对外签名与 `lib.rs` 调用点不动
-2. 测试门：`cargo test`（Windows 现有测试全过）；新增跨编译门 `rustup target add x86_64-unknown-linux-gnu` + `cargo check --target x86_64-unknown-linux-gnu`，让**非 Windows 分支（unsupported 与未来平台代码）持续过编译**（纯 check 不链接，Windows CI 可跑）
+> 实施更正（2026-11-14）：初稿的「收敛为 trait」与「windows CI 跑 Linux cross check」两处假设均被实测否证——前者撞 object-safety，后者撞 `libdbus-sys`/pkg-config；改为保留 cfg 模块 + `ubuntu-latest` host check。详见 [Phase 0 实施记录](2026-11-14-phase0-implementation.md)。
+
+1. 修 `lib.rs` 的 `pin_overlays`：`window.hwnd()` 段用 `#[cfg(windows)]` 隔离，非 Windows 分支仍调用 `platform::pin_window_over_desktop`（保持 7 函数接缝面对称，`unsupported.rs` 返回 `unsupported_platform` 被忽略）
+2. CI 新增 `linux-check` job（`ubuntu-latest`）：装 Tauri v2 官方 Linux 系统依赖 → `cargo check --manifest-path src-tauri/Cargo.toml`，让**非 Windows 分支（unsupported 与未来平台代码）持续过编译**
 3. `unsupported.rs` 保留现语义（probe 返回 "supports Windows only"，其余返回 `unsupported_platform`）
 
-验收：现有测试不改断言全过；跨编译 check 绿；`npm test` 不回归。
+验收：现有测试不改断言全过；Linux host `cargo check` 绿；`npm test` 不回归。
 
 ### Phase 1：macOS 最小可行（推荐"读 + 还原"，暂不做"保存新布局"）
 
@@ -103,7 +108,7 @@
 3. 覆盖窗：Tauri 多窗 + NSPanel/桌面层级实测（Q5，首要技术风险项）
 4. `apply_positions`：`set desktop position` 写回 + **完整复刻 Windows 三态语义**（名字解析、逐项读回校验、`skipped_missing`/`failed_write`、回滚）
 5. 权限流：首启引导 Automation 授权；被拒时 probe 走 `permission_denied` 文案
-6. 局中行为与 Windows 对齐：真实图标原样不动、被覆盖窗遮住；`set_icons_visible` 在 macOS 返回成功空操作或明确错误码（二选一，实现时定）
+6. 局中行为与 Windows 对齐：真实图标原样不动、被覆盖窗遮住；`set_icons_visible` **建议返回明确"不支持"而非成功空操作**——项目 AGENTS.md 反复强调"能跑≠跑对"，假装成功的隐藏调用正是会埋雷的那种（前端当前用 `let _ =` 忽略返回值，返回错误码不会崩）
 
 显式降级：不做截屏差分卡面、不做 Fences 等价物探测、不做"保存新布局"。
 
@@ -111,7 +116,8 @@
 
 **推荐顺序：Cinnamon/Nemo → GNOME(ding) → KDE Plasma**。理由：Nemo 与 ding 同用 GVFS metadata，`gio` 一条通道覆盖两个 DE、无私有格式、无重启生效问题，单位成本覆盖面最大；KDE 的 `positions=` 在 appletsrc 私有键里、官方自认脆弱 [S17]、生效条件未核实，投入产出最差。
 
-- **2a Cinnamon/Nemo on X11**：`probe`（gio 枚举 ~/Desktop + nemo-desktop 进程检测）→ `capture`（gio 读 `metadata::nemo-icon-position` + 截图差分抠卡面）→ `apply_positions`（`gio set` 写回 + 读回校验）→ X11 EWMH 定位/置顶覆盖窗
+- **2a Cinnamon/Nemo on X11**：`probe`（gio 枚举 ~/Desktop + nemo-desktop 进程检测）→ `capture`（gio 读 `metadata::nemo-icon-position` + 按文件名取图标）→ `apply_positions`（`gio set` 写回 + 读回校验）→ X11 EWMH 定位/置顶覆盖窗
+  - 卡面更正：初稿写"截图差分抠卡面"，但 Windows 的差分依赖 `PrintWindow` + 整局隐藏真实图标，X11 无 `PrintWindow`、且 Nemo/ding 没有整局隐藏图标的等价开关，无法照搬。**降级为按文件名取图标**（freedesktop icon theme / gio 缩略图），与 macOS 的 `icon(forFile:)` 同思路，截图差分仅留作视觉不达标时的增强。
 - **2b GNOME on X11**：同 2a，属性名换 `metadata::nautilus-icon-position`；probe 增加"DING 扩展是否启用"检查，未启用则提示（不代装）
 - **2c KDE Plasma**：先立专项实测（appletsrc `positions=` 读写、生效条件、Plasma 5/6 差异），有结论再评估是否值得做
 - **Wayland**：所有子阶段仅支持 X11；Wayland 会话 → 启动器明示不支持并建议切换（Q10）
@@ -133,7 +139,7 @@
 
 ## 验证标准
 
-- **Phase 0 跑通 =** `cargo test` 全绿（不改任何断言）+ `cargo check --target x86_64-unknown-linux-gnu` 通过 + `npm run check && npm test` 不回归
+- **Phase 0 跑通 =** Windows 侧 `cargo test` / `cargo fmt --check` / `cargo clippy --all-targets -- -D warnings` 全绿（不改任何断言）+ Linux runner 上 `cargo check`（host target）通过 + `npm run check && npm test` 不回归
 - **Phase 1 跑通 =** 一台真 Mac（Sonoma 或更新）上：
   1. 首启完成 Automation 授权，probe 读出 ≥2 个桌面图标并渲染牌桌（卡面与真实图标人工比对可接受）
   2. 完整一局 → Esc 恢复：AppleScript 读回逐项比对坐标，图标全部回到原位；`rollback_ok` 等价的回滚路径可用
@@ -177,3 +183,10 @@
 | S27 | https://github.com/tauri-apps/tauri/issues/5425 | Tauri Wayland 启动问题实例 |
 | S28 | https://www.reddit.com/r/tauri/comments/1x1ugmd/shipping_a_tauri_2_app_to_windows_and_linux_7/ | Tauri 2 Linux 实战坑（resize-drag 等） |
 | S29 | http://who-t.blogspot.com/2022/12/libei-opening-portal-doors.html | Wayland 输入注入仅 RemoteDesktop/libei |
+| S30 | https://v2.tauri.app/start/prerequisites/ | Tauri v2 Linux 系统依赖官方清单（CI job 的 apt 来源） |
+
+---
+
+## Phase 0 实施记录
+
+Phase 0 的实测结论、两处否证、本机验证输出与未验证项，另见 [2026-11-14-phase0-implementation.md](2026-11-14-phase0-implementation.md)（按 pre-commit 文件大小约束拆出）。
