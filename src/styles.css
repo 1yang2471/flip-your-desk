@@ -1219,6 +1219,39 @@ button {
   box-shadow: 0 10px 24px rgba(0, 0, 0, 0.4);
 }
 
+/* 桌面呼吸：C1 摸鱼 —— 失焦时正面视觉盖上（DOM 不销毁），HUD 收成小金点。 */
+.card.veiled .card-face-inner {
+  transform: rotateY(180deg);
+  animation: none;
+}
+
+.hud-wrap.hud-dozing .hud {
+  width: 12px;
+  height: 12px;
+  padding: 0;
+  gap: 0;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--accent);
+  border-color: var(--accent);
+  box-shadow: none;
+}
+
+.hud-wrap.hud-dozing .hud > *:not(.hud-button) {
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* C2 呼吸：空闲一次 1px 级起伏，播完由 JS 移除类。 */
+@keyframes card-breathe {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-1px); }
+}
+
+.card-back.breathing .card-back-inner {
+  animation: card-breathe 2400ms var(--ease) 1;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

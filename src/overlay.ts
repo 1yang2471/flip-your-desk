@@ -3,6 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { api, asAppError } from "./api";
 import { Sounds } from "./audio";
 import { clear, h, iconEl } from "./dom";
+import { PresenceController } from "./presence";
 import {
   detectLang,
   errorText,
@@ -78,6 +79,8 @@ export class OverlayGame {
   private toastTimer: number | null = null;
   /** 发牌级联的逐卡 tick 定时器，窗口销毁时统一清理。 */
   private dealTimers: number[] = [];
+  private presence: PresenceController | null = null;
+  private readonly reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
 
   constructor(view: OverlayView, root: HTMLElement) {
     this.view = view;
@@ -95,6 +98,7 @@ export class OverlayGame {
     this.buildBoard();
     this.applyState(this.state, true);
     this.bindEvents();
+    this.bindPresence();
     window.addEventListener("beforeunload", () => this.destroy());
   }
 
@@ -271,6 +275,37 @@ export class OverlayGame {
     this.clockTimer = window.setInterval(() => this.updateClock(), 1000);
   }
 
+  private bindPresence(): void {
+    this.presence = new PresenceController({
+      onHide: () => {
+        this.root.classList.add("veiled");
+        this.hudWrap.classList.add("hud-dozing");
+      },
+      onShow: () => {
+        this.root.classList.remove("veiled");
+        this.hudWrap.classList.remove("hud-dozing");
+      },
+      onIdle: () => this.breathe(),
+    });
+    // 任何指针操作都重置空闲计时；隐藏态由 focus/blur 单独管。
+    this.board.addEventListener("pointerdown", () => this.presence?.resetIdle());
+  }
+
+  private breathe(): void {
+    if (this.reducedMotion.matches || this.root.classList.contains("veiled")) return;
+    for (const back of this.backs.values()) {
+      back.classList.remove("breathing");
+      // 强制回流，保证同一个元素连续两次空闲都能重播。
+      void back.offsetWidth;
+      back.classList.add("breathing");
+      back.addEventListener(
+        "animationend",
+        () => back.classList.remove("breathing"),
+        { once: true },
+      );
+    }
+  }
+
   /** 覆盖窗关闭/重建时释放定时器与事件监听，避免多局叠加。 */
   destroy(): void {
     if (this.clockTimer !== null) window.clearInterval(this.clockTimer);
@@ -280,6 +315,8 @@ export class OverlayGame {
     for (const unlisten of this.unlisteners) unlisten();
     this.unlisteners = [];
     document.removeEventListener("keydown", this.onKeyDownBound);
+    this.presence?.dispose();
+    this.presence = null;
   }
 
   private onKeyDown(event: KeyboardEvent): void {

@@ -181,15 +181,15 @@ git commit -m "feat(overlay): 新增 PresenceController（窗口活跃度事件�
 
 ```js
 test("摸鱼：.veiled 把正面翻回背面且不销毁正面 DOM", async () => {
+  const css = readFileSync(join(ROOT, "src/styles.css"), "utf8");
+  assert.match(css, /\.card\.veiled \.card-face-inner/, ".veiled 作用于卡面内层");
+  assert.match(css, /\.card\.veiled[\s\S]{0,120}rotateY\(180deg\)/, "翻回背面");
   const out = await fresh(`(() => {
     const face = document.getElementById('face');
-    const inner = face.querySelector('.card-face-inner');
     face.classList.add('veiled');
-    const t = getComputedStyle(inner).transform;
-    return { t, stillThere: document.getElementById('face') !== null };
+    return { stillThere: document.getElementById('face') !== null };
   })()`);
   assert.ok(out.stillThere, "正面 DOM 不被销毁");
-  assert.match(out.t, /matrix3d|matrix\(/, ".veiled 改变了 3D 变换");
 });
 
 test("摸鱼：.hud-dozing 把 HUD 收成小金点且禁止 reduced-motion 外动画", async () => {
@@ -198,12 +198,12 @@ test("摸鱼：.hud-dozing 把 HUD 收成小金点且禁止 reduced-motion 外�
   assert.match(css, /prefers-reduced-motion: reduce/, "沿用全局 reduced-motion 块");
 });
 
-test("呼吸：.breathing 是一次性 1px 级起伏且播完自动移除由 JS 保证", () => {
+test("呼吸：.breathing 是一次性 1px 起伏、播完由 JS 移除、reduced-motion 直通", () => {
   const css = readFileSync(join(ROOT, "src/styles.css"), "utf8");
   assert.match(css, /@keyframes card-breathe/, "存在呼吸 keyframe");
   const f = readFileSync(join(ROOT, "src/overlay.ts"), "utf8");
   assert.match(f, /animationend/, "播完移除类靠 animationend 监听");
-  assert.match(f, /reduce/.test(f) ? /matchMedia\("\(prefers-reduced-motion: reduce\)"\)/ : /breathing/, "reduced-motion 分支或 breathing 接线存在");
+  assert.match(f, /matchMedia\("\(prefers-reduced-motion: reduce\)"\)/, "reduced-motion 判定存在");
 });
 ```
 

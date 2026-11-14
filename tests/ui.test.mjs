@@ -562,6 +562,42 @@ test("PresenceController: 只派发三个回调、不碰 DOM、可 dispose", () 
   assert.match(f, /IDLE_MS\s*=\s*8000/, "空闲阈值常量为 8000ms");
 });
 
+test("摸鱼：.veiled 把正面翻回背面且不销毁正面 DOM", async () => {
+  const css = readFileSync(join(ROOT, "src/styles.css"), "utf8");
+  assert.match(css, /\.card\.veiled \.card-face-inner/, ".veiled 作用于卡面内层");
+  assert.match(css, /\.card\.veiled[\s\S]{0,120}rotateY\(180deg\)/, "翻回背面");
+  const out = await fresh(`(() => {
+    const face = document.getElementById('face');
+    face.classList.add('veiled');
+    return { stillThere: document.getElementById('face') !== null };
+  })()`);
+  assert.ok(out.stillThere, "正面 DOM 不被销毁");
+});
+
+test("摸鱼：.hud-dozing 把 HUD 收成小金点且沿用 reduced-motion 块", () => {
+  const css = readFileSync(join(ROOT, "src/styles.css"), "utf8");
+  assert.match(css, /\.hud-dozing/, "存在 .hud-dozing 规则");
+  assert.match(css, /prefers-reduced-motion: reduce/, "沿用全局 reduced-motion 块");
+});
+
+test("呼吸：.breathing 是一次性 1px 起伏、播完由 JS 移除、reduced-motion 直通", () => {
+  const css = readFileSync(join(ROOT, "src/styles.css"), "utf8");
+  assert.match(css, /@keyframes card-breathe/, "存在呼吸 keyframe");
+  const f = readFileSync(join(ROOT, "src/overlay.ts"), "utf8");
+  assert.match(f, /animationend/, "播完移除类靠 animationend 监听");
+  assert.match(f, /matchMedia\("\(prefers-reduced-motion: reduce\)"\)/, "reduced-motion 判定存在");
+});
+
+test("摸鱼是纯视觉伪装：onHide/onShow 不发 IPC、不改游戏状态", () => {
+  const f = readFileSync(join(ROOT, "src/overlay.ts"), "utf8");
+  const start = f.indexOf("private bindPresence()");
+  const end = f.indexOf("private breathe()");
+  const block = f.slice(start, end);
+  assert.match(block, /classList\.add\("veiled"\)/, "onHide 只加类");
+  assert.match(block, /classList\.remove\("veiled"\)/, "onShow 只移类");
+  assert.ok(!/api\.|invoke|emit|state-changed/.test(block), "Presence 接线块零 IPC / 零状态事件");
+});
+
 let failed = 0;
 try {
   await start();
