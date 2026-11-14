@@ -1075,7 +1075,10 @@ fn capture_chunk_ranges(total: usize, parts: usize) -> Vec<std::ops::Range<usize
         .collect()
 }
 
-pub fn capture(monitors: &[MonitorInfo]) -> AppResult<Captured> {
+pub fn capture(
+    monitors: &[MonitorInfo],
+    progress: impl Fn(usize, usize) + Send + Sync,
+) -> AppResult<Captured> {
     let desktop = Desktop::open()?;
     if !desktop.icons_visible() {
         return Err(AppError::new("icons_hidden"));
@@ -1117,39 +1120,74 @@ pub fn capture(monitors: &[MonitorInfo]) -> AppResult<Captured> {
         },
         None => LabelFont::default(),
     };
-    let icons = items
-        .iter()
-        .enumerate()
-        .map(|(slot, item)| {
-            let cell = RectI {
-                x: item.x,
-                y: item.y,
-                w: spacing.0,
-                h: spacing.1,
-            };
-            let monitor = geometry::monitor_for_cell(cell, monitors);
-            // Explorer 的标签矩形是逻辑网格坐标，与自定义图标位置不一定同原点；
-            // 取它的宽度和中心相对 cell 的偏移，文字才会按桌面的方式居中/溢出。
-            let label_rect = desktop.item_rect(slot, LVIR_LABEL).ok().flatten();
-            let label_width = label_rect
-                .map(|rect| rect.right - rect.left)
-                .unwrap_or(cell.w);
-            let extract = extract_cell(&with_icons, &clean, origin, cell, label_width);
-            IconRecord {
-                id: slot as u32,
-                name: item.name.clone(),
-                image: extract
-                    .image
-                    .as_ref()
-                    .and_then(|image| encode_png_data_url(image).ok())
-                    .unwrap_or_default(),
-                cell,
-                monitor,
-                tone: tone_for_cell(&clean, origin, cell),
-                label: extract.label,
-            }
-        })
-        .collect::<Vec<_>>();
+    // 阶段一（串行）：label_rect 走跨进程 SendMessage，多线程并发发消息
+    // 收益小风险高——在进入并行区之前一次性收齐。
+    let label_rects: Vec<Option<RECT>> = (0..items.len())
+        .map(|slot| desktop.item_rect(slot, LVIR_LABEL).ok().flatten())
+        .collect();
+
+    // 阶段二（并行）：extract_cell / encode_png_data_url / tone_for_cell
+    // 都是纯像素工作，输入区间互不重叠，可安全并行。
+    let threads = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4)
+        .max(1);
+    let ranges = capture_chunk_ranges(items.len(), threads);
+    let icons: Vec<IconRecord> = {
+        // move 闭包改捕获共享引用（Copy），避免把 Vec 本体 move 进第一个线程。
+        let items = &items;
+        let label_rects = &label_rects;
+        let with_icons = &with_icons;
+        let clean = &clean;
+        let scope_result = std::thread::scope(|scope| {
+            let handles: Vec<_> = ranges
+                .into_iter()
+                .map(|range| {
+                    scope.spawn(move || {
+                        let mut chunk = Vec::with_capacity(range.len());
+                        for slot in range {
+                            let item = &items[slot];
+                            let cell = RectI {
+                                x: item.x,
+                                y: item.y,
+                                w: spacing.0,
+                                h: spacing.1,
+                            };
+                            let monitor = geometry::monitor_for_cell(cell, monitors);
+                            // Explorer 的标签矩形是逻辑网格坐标，与自定义图标位置不一定同原点；
+                            // 取它的宽度和中心相对 cell 的偏移，文字才会按桌面的方式居中/溢出。
+                            let label_rect = label_rects[slot];
+                            let label_width = label_rect
+                                .map(|rect| rect.right - rect.left)
+                                .unwrap_or(cell.w);
+                            let extract =
+                                extract_cell(&with_icons, &clean, origin, cell, label_width);
+                            chunk.push(IconRecord {
+                                id: slot as u32,
+                                name: item.name.clone(),
+                                image: extract
+                                    .image
+                                    .as_ref()
+                                    .and_then(|image| encode_png_data_url(image).ok())
+                                    .unwrap_or_default(),
+                                cell,
+                                monitor,
+                                tone: tone_for_cell(&clean, origin, cell),
+                                label: extract.label,
+                            });
+                        }
+                        chunk
+                    })
+                })
+                .collect::<Vec<_>>();
+            handles
+                .into_iter()
+                .map(|h| h.join().unwrap())
+                .collect::<Vec<Vec<_>>>()
+        });
+        scope_result.into_iter().flatten().collect()
+    };
+    progress(items.len(), items.len());
 
     Ok(Captured { icons, label_font })
 }

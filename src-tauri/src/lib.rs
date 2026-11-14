@@ -324,10 +324,13 @@ async fn start_round(
         game::mock_snapshot(&monitors)
     } else {
         let monitors_for_capture = monitors.clone();
-        let captured =
-            tauri::async_runtime::spawn_blocking(move || platform::capture(&monitors_for_capture))
-                .await
-                .map_err(AppError::from)??;
+        let captured = tauri::async_runtime::spawn_blocking(move || {
+            platform::capture(&monitors_for_capture, |done, total| {
+                let _ = (done, total);
+            })
+        })
+        .await
+        .map_err(AppError::from)??;
         // capture 成功后真实图标保持隐藏，整局都用它盖住答案。
         lock_state(&state).icons_hidden = true;
         set_icon_marker(&app, true);
