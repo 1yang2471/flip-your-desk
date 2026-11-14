@@ -40,7 +40,7 @@ const TOGGLE_DESKTOP_ICONS: usize = 0x7402;
 
 const LVM_GETITEMCOUNT: u32 = 0x1004;
 const LVM_GETITEMPOSITION: u32 = 0x1010;
-const LVM_SETITEMPOSITION32: u32 = 0x1049;
+const LVM_SETITEMPOSITION32: u32 = 0x1031;
 const LVM_GETITEMTEXTW: u32 = 0x1073;
 const LVM_GETITEMSPACING: u32 = 0x1033;
 const LVM_SETITEMSTATE: u32 = 0x102B;
@@ -1403,6 +1403,25 @@ mod tests {
             x,
             y,
         }
+    }
+
+    #[test]
+    fn lvm_message_constants_match_commctrl() {
+        // 2026-11-14 实测事故：LVM_SETITEMPOSITION32 曾写成 0x1049（实为
+        // LVM_GETNUMBEROFWORKAREAS，一个 GET 消息），保存永远"没落位"却
+        // 不报错——Explorer 返回 0 且桌面毫无变化。真机三消息对比实测：
+        // 0x100F/0x1031 会移动，0x1049 完全无效。此处锁死 commctrl.h 定义
+        // （LVM_FIRST = 0x1000），任何改动都必须先过这张表。
+        const LVM_FIRST: u32 = 0x1000;
+        assert_eq!(LVM_GETITEMCOUNT, LVM_FIRST + 4);
+        assert_eq!(LVM_GETITEMRECT, LVM_FIRST + 14);
+        assert_eq!(LVM_GETITEMPOSITION, LVM_FIRST + 16);
+        assert_eq!(LVM_SETITEMSTATE, LVM_FIRST + 43);
+        assert_eq!(LVM_GETITEMSPACING, LVM_FIRST + 51);
+        assert_eq!(LVM_SETITEMPOSITION32, LVM_FIRST + 49);
+        assert_eq!(LVM_GETITEMTEXTW, LVM_FIRST + 115);
+        // 写位置与读位置不能是同一个消息（0x1049 事故的本质）。
+        assert_ne!(LVM_SETITEMPOSITION32, LVM_GETITEMPOSITION);
     }
 
     #[test]
