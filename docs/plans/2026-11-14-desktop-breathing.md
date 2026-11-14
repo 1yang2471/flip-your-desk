@@ -375,6 +375,10 @@ test("ExitChoreography: then 在动画完成回调里、cancel 阻止 then、red
   const playBlock = f.slice(playStart, cancelStart);
   assert.match(playBlock, /setTimeout/, "then 由定时器延后执行");
   assert.ok(!/^\s*then\(\);/m.test(playBlock), "then 不在点击同步路径里直接调用");
+  assert.match(f, /cardTimers/, "逐卡定时器被持有，cancel 才能清干净");
+  assert.match(f, /cardTimers\.push/, "逐卡定时器入册");
+  const cancelBlock = f.slice(cancelStart, f.indexOf("private finish()"));
+  assert.match(cancelBlock, /cardTimers/, "cancel 清理逐卡定时器");
 });
 ```
 
@@ -395,6 +399,7 @@ export class ExitChoreography {
   private readonly cards: HTMLElement[];
   private readonly reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
   private timer: number | null = null;
+  private cardTimers: number[] = [];
   private then: (() => void) | null = null;
   private readonly perCard: number;
 
@@ -412,18 +417,20 @@ export class ExitChoreography {
       return;
     }
     this.cards.forEach((card, index) => {
-      window.setTimeout(() => {
+      this.cardTimers.push(window.setTimeout(() => {
         card.classList.add("revealing");
         if (slide) card.classList.add("sliding");
-      }, index * this.perCard);
+      }, index * this.perCard));
     });
     this.timer = window.setTimeout(() => this.finish(), REVEAL_MS);
   }
 
-  /** 取消：移除所有类、清定时器，then 绝不执行。 */
+  /** 取消：移除所有类、清掉主定时器与逐卡定时器，then 绝不执行。 */
   cancel(): void {
     if (this.timer !== null) window.clearTimeout(this.timer);
     this.timer = null;
+    for (const id of this.cardTimers) window.clearTimeout(id);
+    this.cardTimers = [];
     this.then = null;
     for (const card of this.cards) {
       card.classList.remove("revealing");
@@ -433,6 +440,7 @@ export class ExitChoreography {
 
   private finish(): void {
     this.timer = null;
+    this.cardTimers = [];
     const then = this.then;
     this.then = null;
     then?.();
@@ -440,7 +448,7 @@ export class ExitChoreography {
 }
 ```
 
-> 实现注记：`play()` 里给每张卡排的 `setTimeout` 未在 `cancel()` 中逐个清除，但回调只做 `classList.add`，而 `cancel()` 之后紧接着会把类移除；若取消后又重播，`play()` 开头的 `cancel()` 会再清一次类。**不再单独持有这些 timer id**，因为它们的副作用可被类移除完全抵消，持有反而增加状态面（YAGNI）。
+> 实现注记（修正）：逐卡 `setTimeout` **必须**持有 id 并在 `cancel()` 里清掉。否则取消之后那些 timer 仍会触发，把 `.revealing` 重新加回卡片上——类移除抵消不了未来的回调。这不是 YAGNI，是取消语义的正确性。
 
 - [ ] **Step 4: 跑测试确认通过**
 

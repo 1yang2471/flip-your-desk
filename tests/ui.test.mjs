@@ -598,6 +598,24 @@ test("摸鱼是纯视觉伪装：onHide/onShow 不发 IPC、不改游戏状态",
   assert.ok(!/api\.|invoke|emit|state-changed/.test(block), "Presence 接线块零 IPC / 零状态事件");
 });
 
+test("ExitChoreography: then 在动画完成回调里、cancel 阻止 then、reduced-motion 直通", () => {
+  const f = readFileSync(join(ROOT, "src/choreography.ts"), "utf8");
+  assert.match(f, /export class ExitChoreography/, "导出 ExitChoreography");
+  assert.match(f, /play\(then:/, "play 接收 then 回调");
+  assert.match(f, /cancel\(\)/, "暴露 cancel");
+  assert.match(f, /REVEAL_MS\s*=\s*1000/, "总时长常量 1000ms");
+  assert.match(f, /matchMedia\("\(prefers-reduced-motion: reduce\)"\)/, "reduced-motion 判定");
+  const playStart = f.indexOf("play(then:");
+  const cancelStart = f.indexOf("cancel():");
+  const playBlock = f.slice(playStart, cancelStart);
+  assert.match(playBlock, /setTimeout/, "then 由定时器延后执行");
+  assert.ok(!/^\s*then\(\);/m.test(playBlock), "then 不在点击同步路径里直接调用");
+  assert.match(f, /cardTimers/, "逐卡定时器被持有，cancel 才能清干净");
+  assert.match(f, /cardTimers\.push/, "逐卡定时器入册");
+  const cancelBlock = f.slice(cancelStart, f.indexOf("private finish()"));
+  assert.match(cancelBlock, /cardTimers/, "cancel 清理逐卡定时器");
+});
+
 let failed = 0;
 try {
   await start();
