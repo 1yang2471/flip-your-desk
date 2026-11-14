@@ -679,6 +679,19 @@ test("动画期间 Esc 可取消（onKeyDown 不在 pending 时直接 return）"
     "pending 时不是无条件 return（否则动画中 Esc 永远到不了取消）");
 });
 
+test("Esc 不再取消选卡：提示与逻辑都只给鼠标路径", () => {
+  const f = readFileSync(join(ROOT, "src/overlay.ts"), "utf8");
+  const block = f.slice(f.indexOf("private onKeyDown("), f.indexOf("private trapFocus("));
+  assert.ok(!/clearSelection\(\)/.test(block), "Esc 分支不再清选中");
+  assert.match(block, /this\.selectedIcon === null/, "无选中时 Esc 仍可开退出确认");
+  const zh = readFileSync(join(ROOT, "src/locales/zh-CN.ts"), "utf8");
+  const en = readFileSync(join(ROOT, "src/locales/en-US.ts"), "utf8");
+  assert.ok(!/overlay\.selected"[^\n]*Esc/.test(zh), "中文提示不再承诺 Esc 取消");
+  assert.ok(!/overlay\.selected"[^\n]*Esc/.test(en), "英文提示不再承诺 Esc 取消");
+  assert.match(zh, /再点一次取消/, "中文提示给出再点一次的取消路径");
+  assert.match(en, /click it again to cancel/, "英文提示给出再点一次的取消路径");
+});
+
 test("退出仪式：三个按钮仍调原命令、runExit 内部零 IPC", () => {
   const f = readFileSync(join(ROOT, "src/overlay.ts"), "utf8");
   assert.match(f, /new ExitChoreography/, "创建了编排器");
@@ -719,13 +732,13 @@ test("启动窗 header：语言按钮与 tagline 不换行、按钮组不收缩"
   assert.equal(out.actionsShrink, "0", "按钮组不被压缩");
 });
 
-test("选中卡只有一圈金边：focus 恢复以接收 Esc，卡片不画焦点环", async () => {
+test("选中卡只有一圈金边：保留键盘路径，卡片不画焦点环", async () => {
   const f = readFileSync(join(ROOT, "src/overlay.ts"), "utf8");
   const select = f.slice(f.indexOf("private selectIcon("), f.indexOf("private clearSelection("));
   assert.ok(select.includes('classList.add("is-selected")'), "选中仍加 is-selected 金边");
-  assert.match(select, /element\.focus\(/, "恢复 programmatic focus（否则 focusable(false) 覆盖窗收不到 Esc）");
+  assert.match(select, /element\.focus\(/, "保留 programmatic focus（覆盖窗 focusable(false)，Esc 退出确认仍需键盘路径）");
   const clear = f.slice(f.indexOf("private clearSelection("), f.indexOf("private commitSelection("));
-  assert.ok(!/\.blur\(/.test(clear), "取消选中不 blur（保住覆盖窗的下一次键盘输入）");
+  assert.ok(!/\.blur\(/.test(clear), "取消选中不 blur（保住覆盖窗的键盘输入）");
 
   const out = await fresh(`(() => {
     const face = document.getElementById('face');

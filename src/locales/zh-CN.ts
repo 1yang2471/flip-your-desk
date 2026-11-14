@@ -65,7 +65,7 @@ export const zhCN = {
   "overlay.moves.other": "{n} 步",
   "overlay.cardBackAria": "未翻开的卡牌",
   "overlay.cardFaceAria": "图标：{name}，按回车选中",
-  "overlay.selected": "已选中。点击另一张牌或空位即可落位，Esc 取消",
+  "overlay.selected": "已选中。点击另一张牌或空位即可落位，再点一次取消",
 
   "result.title": "本局结束",
   "result.accuracy": "正确率",

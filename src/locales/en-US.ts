@@ -67,7 +67,7 @@ export const enUS = {
   "overlay.moves.other": "{n} moves",
   "overlay.cardBackAria": "Face-down card",
   "overlay.cardFaceAria": "Icon: {name}. Press Enter to pick it up",
-  "overlay.selected": "Picked up. Click another card or an empty slot to place it, Esc to cancel",
+  "overlay.selected": "Picked up. Click another card or an empty slot to place it, or click it again to cancel",
 
   "result.title": "Round complete",
   "result.accuracy": "Accuracy",

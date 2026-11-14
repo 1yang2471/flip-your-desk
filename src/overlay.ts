@@ -367,11 +367,11 @@ export class OverlayGame {
       }
       if (this.exitOpen) {
         this.hideExitConfirm();
-      } else if (this.selectedIcon !== null) {
-        this.clearSelection();
-      } else {
+      } else if (this.selectedIcon === null) {
         this.showExitConfirm();
       }
+      // 有选中卡时 Esc 不做任何事：取消选中改为再点一次该卡。
+      // （覆盖窗 focusable(false)，键盘路径本来就不可靠，不再让它承担选卡操作。）
       return;
     }
   }
@@ -850,9 +850,9 @@ export class OverlayGame {
     const element = this.faces.get(iconId);
     if (element) {
       element.classList.add("is-selected");
-      // 必须 programmatic focus：覆盖窗是 focusable(false)，pointerdown 又
-      // preventDefault 掉了默认聚焦；没有 DOM 焦点，覆盖窗收不到 Esc。
-      // 卡片不画焦点环（见 styles.css），不会与 .is-selected 叠成两圈。
+      // 保留 DOM 焦点：覆盖窗是 focusable(false)，pointerdown 又
+      // preventDefault 掉了默认聚焦；没有焦点，Esc 连退出确认/关闭弹窗
+      // 都收不到。卡片不画焦点环（见 styles.css），不会与 .is-selected 叠圈。
       element.focus({ preventScroll: true });
     }
     this.hudHint.hidden = false;
@@ -865,8 +865,8 @@ export class OverlayGame {
       const element = this.faces.get(this.selectedIcon);
       if (element) {
         element.classList.remove("is-selected");
-        // 不 blur：焦点是覆盖窗继续收到下一次 Esc 的唯一来源，
-        // 松掉焦点可能让「再按 Esc 开退出确认」也失效。
+        // 不 blur：焦点是覆盖窗继续收到 Esc（退出确认/关闭弹窗）的来源，
+        // 取消选中不应把键盘路径一起丢掉。
       }
     }
     this.selectedIcon = null;

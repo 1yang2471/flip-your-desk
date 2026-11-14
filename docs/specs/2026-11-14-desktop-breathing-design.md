@@ -35,14 +35,14 @@
 
 - ~~**C1 摸鱼模式**~~ **已下线**（2026-11-14 手测后用户拍板）：覆盖窗是 `focusable(false)`（为免点击卡片把覆盖层抬到普通窗口之上），`focus` 事件不可靠，「切回来自动恢复」实际变成「要点一下才恢复」，收益小于体验代价。相关 `.veiled` / `.hud-dozing` CSS、`PresenceController` 的 onHide/onShow、face 的 `data-tone` 全部移除。
 - **C2 呼吸间隔**：连续 8 秒无任何操作（常量 `IDLE_MS = 8000`，不进设置），卡背极慢起伏一次（1px 级），不弹任何东西。
-- **C4 退出仪式**：Esc 退出确认里点「退出」（`quit_app`）、以及结算里点「回到原布局」（`restoreAndExit`）时，卡背按 y/x 排序依次翻回真图标（多米诺，总时长常量 `REVEAL_MS = 1000`），**演完才**调对应命令。局中退出确认只调 `quit_app`（已核实 `overlay.ts`）；`restoreAndExit` 属于结算弹窗而非退出确认。
+- **C4 退出仪式**：HUD ✕ 的退出确认里点「退出」（`quit_app`）、以及结算里点「回到原布局」（`restoreAndExit`）时，卡背按 y/x 排序依次翻回真图标（多米诺，总时长常量 `REVEAL_MS = 1000`），**演完才**调对应命令。局中退出确认只调 `quit_app`（已核实 `overlay.ts`）；`restoreAndExit` 属于结算弹窗而非退出确认。
 - **A4（最终降级版）：只保留时序，不做滑行**：结算里点「保存新布局」（`saveAndExit`）时，同样走 C4 的多米诺演出，**演完才**调 `saveAndExit`；**不做假图标滑行**。真实桌面恢复与写回仍由现有命令原样执行。结算里「再来一局」不演动画，保持原样。
 
 > 修订记录（2026-11-14 审查后）：初版 A4 写了「假图标滑到目标槽位再淡出」，但实测发现 `--slide-x/--slide-y` 无 JS 赋值、且卡片定位靠内联 `transform` 压过 `.sliding` 类规则，滑行在真实 DOM 下既不滑也不淡。经用户拍板，**整项砍掉假滑行**（`.sliding` 类、`slide` 参数、`--slide-*` 变量全部移除），只保留「演完才发命令」这一有实际价值的语义。
 >
 > 修订记录（2026-11-14 手测后）：C1 摸鱼整项下线（见上），附带修掉启动窗切语言闪透明、选中卡叠两圈金边。
 >
-> 修订记录（2026-11-14 二轮手测后）：Esc 取消选卡在真实窗口失效——覆盖窗 `focusable(false)` 且卡片的 `pointerdown` 被 `preventDefault`，去掉 programmatic focus 后收不到 keydown。改为选中时恢复 `focus()`，卡片本身不画焦点环（避免与 `.is-selected` 叠圈），取消选中不 blur（保住下一次 Esc 的输入）。退出仪式在结算屏（全正面卡）无动画——`.revealing` 只匹配 `.card-back`；正面卡改用独立 `rotate` 属性翻走（不替换入场 `transform` 动画，取消可平滑转回），逐卡排期预留 320ms，保证最后一张也在 `REVEAL_MS` 内翻完。
+> 修订记录（2026-11-14 二轮手测后）：Esc 取消选卡整项下线（用户拍板）——覆盖窗 `focusable(false)` 且卡片的 `pointerdown` 被 `preventDefault`，键盘路径不可靠；取消选中改为再点一次该卡。`focus()` 保留给其余 Esc 动作（无选中时开退出确认、关闭退出确认、取消退出演出），卡片本身不画焦点环（避免与 `.is-selected` 叠圈）。退出仪式在结算屏（全正面卡）无动画——`.revealing` 只匹配 `.card-back`；正面卡改用独立 `rotate` 属性翻走（不替换入场 `transform` 动画，取消可平滑转回），逐卡排期预留 320ms，保证最后一张也在 `REVEAL_MS` 内翻完。
 
 **明确不做**
 
