@@ -7,7 +7,7 @@ ALLOWLIST="$(git rev-parse --show-toplevel)/.githooks/oversized-allowlist"
 fail=0
 for f in $(git diff --cached --name-only --diff-filter=ACMR); do
   case "$f" in
-    *lock.json | Cargo.lock | *.png | *.gif | *.ico | *.jpg | *.jpeg | *.webp | *.svg | *.exe | *.msi) continue ;;
+    *lock.json | *Cargo.lock | *.png | *.gif | *.ico | *.jpg | *.jpeg | *.webp | *.svg | *.exe | *.msi) continue ;;
   esac
   if [ -f "$ALLOWLIST" ] && grep -qxF "$f" "$ALLOWLIST"; then
     continue

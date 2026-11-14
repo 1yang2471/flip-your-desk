@@ -19,9 +19,25 @@ jobs:
           cache: npm
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
 
       - name: Install frontend dependencies
         run: npm ci
+
+      # tag 前先把 CI 的门在 release 里再跑一遍：此前 release 不依赖 CI，
+      # v0.1.1 曾在 CI 全红（clippy -D warnings）时照发。
+      - name: Type check frontend
+        run: npm run check
+
+      - name: Check Rust formatting
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+
+      - name: Lint backend
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+
+      - name: Test backend
+        run: cargo test --manifest-path src-tauri/Cargo.toml
 
       - uses: tauri-apps/tauri-action@v0
         env:

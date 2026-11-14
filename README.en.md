@@ -24,7 +24,7 @@ Flip every desktop icon face down, draw the real icons back at random, and put e
 
 Grab a build from [Releases](https://github.com/1yang2471/flip-your-desk/releases):
 
-- `Flip.Your.Desk_0.1.1_x64-setup.exe`: NSIS installer for the current user
+- `Flip.Your.Desk_0.2.0_x64-setup.exe`: NSIS installer for the current user
 
 The installed program `flip-your-desk.exe` requires the Microsoft Edge WebView2 runtime (ships with Windows 11).
 

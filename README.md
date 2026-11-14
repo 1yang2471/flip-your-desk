@@ -24,7 +24,7 @@
 
 从 [Releases](https://github.com/1yang2471/flip-your-desk/releases) 下载：
 
-- `Flip.Your.Desk_0.1.1_x64-setup.exe`：安装版（NSIS，为当前用户安装）
+- `Flip.Your.Desk_0.2.0_x64-setup.exe`：安装版（NSIS，为当前用户安装）
 
 安装后的主程序 `flip-your-desk.exe` 需要 Microsoft Edge WebView2 运行时（Windows 11 自带）。
 
