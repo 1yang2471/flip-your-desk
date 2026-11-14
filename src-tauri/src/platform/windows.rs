@@ -1240,6 +1240,21 @@ pub fn apply_positions(positions: &[IconWrite]) -> AppResult<ApplyReport> {
     if desktop.auto_arrange() {
         return Err(AppError::new("auto_arrange_on"));
     }
+    // 0x7402 显示切换后 Explorer 的标签读取会短暂返回空字符串（2026-11-14 故障
+    // 注入实测：保存紧跟显示恢复时按名解析全军落空，moved=0 却 exit 0 静默无操作；
+    // 数分钟后恢复可读）。解析前先等标签可读；等不到就报错，绝不静默空写。
+    let mut labels_ready = false;
+    for _ in 0..20 {
+        if !desktop.item_text(0)?.is_empty() {
+            labels_ready = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(150));
+    }
+    if !labels_ready {
+        eprintln!("apply: labels unavailable after 3s wait");
+        return Err(AppError::new("desktop_labels_unavailable"));
+    }
     let (_, items, _) = desktop.read_items()?;
     // 以名字为身份把目标配到当前桌面项上；同名图标取离目标位置最近的一个。
     let (resolved, missing) = resolve_targets(positions, &items);
@@ -1260,6 +1275,7 @@ pub fn apply_positions(positions: &[IconWrite]) -> AppResult<ApplyReport> {
                     if err.code == "desktop_changed" {
                         return Err(err);
                     }
+                    eprintln!("apply: write '{}' attempt {} failed: {}", target.name, attempt, err);
                     if attempt < 2 {
                         std::thread::sleep(Duration::from_millis(120));
                     }

@@ -654,6 +654,7 @@ async fn save_and_exit(app: AppHandle, state: State<'_, AppState>) -> AppResult<
             Ok(())
         }
         Some(err) => {
+            eprintln!("save: failed {err}");
             lock_state(&state).writing = false;
             Err(err)
         }
