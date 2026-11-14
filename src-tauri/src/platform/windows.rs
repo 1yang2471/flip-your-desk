@@ -297,6 +297,9 @@ impl Desktop {
     }
 
     fn item_text(&self, index: usize) -> AppResult<String> {
+        // 发送前清零文本区：LVM_GETITEMTEXTW 失败时不写任何内容，不清零会读到
+        // 上一次调用残留的名字（跨进程缓冲区复用），按名写回据此会张冠李戴。
+        self.remote.write(TEXT_OFFSET, &[0u16; 512])?;
         let item = LvItemW {
             mask: LVIF_TEXT,
             i_item: index as i32,
@@ -305,11 +308,18 @@ impl Desktop {
             ..Default::default()
         };
         self.remote.write(0, &item)?;
-        self.send(listview_msg(
+        let copied = self.send(listview_msg(
             LVM_GETITEMTEXTW,
             index,
             self.remote.ptr_at(0) as isize,
         ))?;
+        // 返回 0 = 没拷到字符（索引越界/集合已变），不能当成空名字静默继续。
+        if copied == 0 {
+            return Err(AppError::with_detail(
+                "desktop_read",
+                format!("LVM_GETITEMTEXTW({index}) 未拷到字符"),
+            ));
+        }
         let mut buffer = [0u16; 512];
         unsafe {
             ReadProcessMemory(
@@ -416,23 +426,25 @@ impl Desktop {
         Ok(result as isize)
     }
 
-    /// 按名定位写入 + 写后校验：每轮先重扫条目按名定位（同名取离目标最近），
-    /// 避免索引漂移写错对象；写后按名读回校验落位（±2px）。
+    /// 按名定位写入 + 写后校验：候选按「离图标原位置最近」选（同名图标靠
+    /// 原位消歧，避免把 A 的坐标写到同名的 B 上），每轮重扫条目以免索引漂移；
+    /// 写后按名读回校验落位（±2px）。
     fn set_item_position(
         &self,
-        screen_x: i32,
-        screen_y: i32,
+        orig_x: i32,
+        orig_y: i32,
+        target_x: i32,
+        target_y: i32,
         expected_name: &str,
     ) -> AppResult<()> {
+        let mut last_seen: Option<(i32, i32)> = None;
         for _round in 0..3 {
             let (_, items, _) = self.read_items()?;
             let index = items
                 .iter()
                 .enumerate()
                 .filter(|(_, it)| it.name == expected_name)
-                .min_by_key(|(_, it)| {
-                    (it.x - screen_x).abs() as i64 + (it.y - screen_y).abs() as i64
-                })
+                .min_by_key(|(_, it)| (it.x - orig_x).abs() as i64 + (it.y - orig_y).abs() as i64)
                 .map(|(i, _)| i);
             let Some(index) = index else {
                 return Err(AppError::with_detail(
@@ -441,8 +453,8 @@ impl Desktop {
                 ));
             };
             let mut point = POINT {
-                x: screen_x,
-                y: screen_y,
+                x: target_x,
+                y: target_y,
             };
             if !unsafe { ScreenToClient(self.listview, &mut point) }.as_bool() {
                 return Err(AppError::with_detail(
@@ -456,10 +468,14 @@ impl Desktop {
             let _ = self.raw_set_item_position(index, point.x, point.y)?;
             // 每次写都可能触发 z 序重排，写后重扫按名验证，不按旧索引读。
             let (_, after, _) = self.read_items()?;
+            last_seen = after
+                .iter()
+                .find(|it| it.name == expected_name)
+                .map(|it| (it.x, it.y));
             let landed = after.iter().any(|it| {
                 it.name == expected_name
-                    && (it.x - screen_x).abs() <= 2
-                    && (it.y - screen_y).abs() <= 2
+                    && (it.x - target_x).abs() <= 2
+                    && (it.y - target_y).abs() <= 2
             });
             if landed {
                 return Ok(());
@@ -468,7 +484,9 @@ impl Desktop {
         }
         Err(AppError::with_detail(
             "desktop_write",
-            format!("\"{expected_name}\" 连续 3 轮未落到 ({screen_x},{screen_y})"),
+            format!(
+                "\"{expected_name}\" 连续 3 轮未落到 ({target_x},{target_y})，每次读到 {last_seen:?}"
+            ),
         ))
     }
 
@@ -1254,16 +1272,17 @@ pub fn apply_positions(positions: &[IconWrite]) -> AppResult<ApplyReport> {
     if desktop.auto_arrange() {
         return Err(AppError::new("auto_arrange_on"));
     }
-    // 0x7402 显示切换后 Explorer 的标签读取会短暂返回空字符串（2026-11-14 故障
-    // 注入实测：保存紧跟显示恢复时按名解析全军落空，moved=0 却 exit 0 静默无操作；
-    // 数分钟后恢复可读）。解析前先等标签可读；等不到就报错，绝不静默空写。
+    // 0x7402 显示切换（restore_desktop_icons）后，Explorer 的标签读取会短暂
+    // 不可用：LVM_GETITEMTEXTW 返回 0 字符（item_text 报错）或空串。2026-11-14
+    // 真机实测：保存紧跟显示恢复时按名解析全军落空。解析前等标签可读——Err 与
+    // 空串都当作"未就绪"继续等，最多 ~10s（50×200ms）；等不到就报错，绝不空写。
     let mut labels_ready = false;
-    for _ in 0..20 {
-        if !desktop.item_text(0)?.is_empty() {
+    for _ in 0..50 {
+        if matches!(desktop.item_text(0), Ok(name) if !name.is_empty()) {
             labels_ready = true;
             break;
         }
-        std::thread::sleep(Duration::from_millis(150));
+        std::thread::sleep(Duration::from_millis(200));
     }
     if !labels_ready {
         eprintln!("apply: labels unavailable after 3s wait");
@@ -1277,7 +1296,13 @@ pub fn apply_positions(positions: &[IconWrite]) -> AppResult<ApplyReport> {
         // explorer 瞬时忙碌会让单条 LVM 写入被拒：重试几次再放弃。
         let mut ok = false;
         for attempt in 0..3 {
-            match desktop.set_item_position(target.x, target.y, &target.name) {
+            match desktop.set_item_position(
+                target.orig_x,
+                target.orig_y,
+                target.x,
+                target.y,
+                &target.name,
+            ) {
                 Ok(()) => {
                     ok = true;
                     break;
@@ -1324,7 +1349,10 @@ fn resolve_targets(
             if used[index] || item.name != target.name {
                 continue;
             }
-            let distance = (item.x - target.x).abs() as i64 + (item.y - target.y).abs() as i64;
+            // 候选按「离图标原位置最近」选：同名图标原位不同，用它消歧；
+            // 游戏期间图标不动，当前坐标即原位置。
+            let distance =
+                (item.x - target.orig_x).abs() as i64 + (item.y - target.orig_y).abs() as i64;
             if best.is_none() || distance < best.unwrap().1 {
                 best = Some((index, distance));
             }
@@ -1337,6 +1365,8 @@ fn resolve_targets(
                     name: target.name.clone(),
                     x: target.x,
                     y: target.y,
+                    orig_x: target.orig_x,
+                    orig_y: target.orig_y,
                 });
             }
             None => missing.push(target.name.clone()),
@@ -1353,6 +1383,9 @@ struct ResolvedTarget {
     name: String,
     x: i32,
     y: i32,
+    /// 图标原始位置，写入时据此在同名项里消歧。
+    orig_x: i32,
+    orig_y: i32,
 }
 
 #[cfg(test)]
@@ -1367,11 +1400,19 @@ mod tests {
         }
     }
 
+    /// 目标 = 原位与目标同点（多数测试场景：图标不动）。
     fn target(name: &str, x: i32, y: i32) -> IconWrite {
+        target_from(name, x, y, x, y)
+    }
+
+    /// 显式给出原位置（同名消歧测试用）。
+    fn target_from(name: &str, orig_x: i32, orig_y: i32, x: i32, y: i32) -> IconWrite {
         IconWrite {
             name: name.into(),
             x,
             y,
+            orig_x,
+            orig_y,
         }
     }
 
@@ -1414,6 +1455,22 @@ mod tests {
         // 两个同名目标各配到不同项上，互不占用。
         assert_eq!(resolved[0].index, 1);
         assert_eq!(resolved[1].index, 0);
+    }
+
+    #[test]
+    fn same_name_disambiguated_by_origin() {
+        // 两个同名图标分别原位于 (0,0) 与 (200,0)，目标 (900,900) 与 (1000,1000)。
+        // 旧逻辑按「离目标最近」配对：处理第二个目标时会重复选中同一实例，
+        // 另一个永不被移动（审查发现的高危点）。新逻辑按「离原位置最近」配对。
+        let items = vec![item("dup", 0, 0), item("dup", 200, 0)];
+        let targets = vec![
+            target_from("dup", 0, 0, 900, 900),
+            target_from("dup", 200, 0, 1000, 1000),
+        ];
+        let (resolved, missing) = resolve_targets(&targets, &items);
+        assert!(missing.is_empty());
+        assert_eq!(resolved[0].index, 0);
+        assert_eq!(resolved[1].index, 1);
     }
 
     #[test]

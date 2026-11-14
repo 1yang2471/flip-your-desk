@@ -289,6 +289,9 @@ impl Round {
                 name: icon.name.clone(),
                 x: cell.x,
                 y: cell.y,
+                // 图标原位置 = 它开局所在的格（同名图标靠它消歧）。
+                orig_x: icon.cell.x,
+                orig_y: icon.cell.y,
             });
         }
         Ok(positions)
@@ -303,6 +306,8 @@ impl Round {
                 name: icon.name.clone(),
                 x: icon.cell.x,
                 y: icon.cell.y,
+                orig_x: icon.cell.x,
+                orig_y: icon.cell.y,
             })
             .collect()
     }

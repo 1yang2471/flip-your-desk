@@ -231,6 +231,9 @@ fn restore_desktop_icons(app: &AppHandle) {
 
 /// 写回前把原布局备份到 app_config_dir/original-layout.json，供人工恢复。
 /// 备份写失败 → 中止保存，桌面一个字节都不动。
+///
+/// 先写 .tmp 再 rename（同卷原子）：备份的意义正是防"保存中被强杀"，
+/// 而强杀恰好可能落在写文件中间，直写会把上一份好备份截断，两条退路一起丢。
 fn write_layout_backup(app: &AppHandle, original: &[IconWrite]) -> AppResult<()> {
     let dir = app
         .path()
@@ -241,8 +244,11 @@ fn write_layout_backup(app: &AppHandle, original: &[IconWrite]) -> AppResult<()>
         .map_err(|err| AppError::with_detail("backup_failed", err.to_string()))?;
     std::fs::create_dir_all(&dir)
         .map_err(|err| AppError::with_detail("backup_failed", err.to_string()))?;
+    let tmp = dir.join("original-layout.json.tmp");
+    std::fs::write(&tmp, json)
+        .map_err(|err| AppError::with_detail("backup_failed", err.to_string()))?;
     let path = dir.join("original-layout.json");
-    std::fs::write(&path, json)
+    std::fs::rename(&tmp, &path)
         .map_err(|err| AppError::with_detail("backup_failed", err.to_string()))?;
     eprintln!("save: layout backup written to {}", path.display());
     Ok(())
@@ -590,8 +596,11 @@ fn set_muted(app: AppHandle, state: State<'_, AppState>, muted: bool) -> AppResu
 
 #[tauri::command]
 async fn save_and_exit(app: AppHandle, state: State<'_, AppState>) -> AppResult<()> {
+    // 检查 + 取快照 + 置位 writing 必须在同一次锁内完成：每个覆盖窗（每屏
+    // 一个）各有独立保存按钮，若在锁外置位，双屏同时点保存会并发写同一
+    // listview（坐标互相踩、双份备份）。
     let (positions, original, mock) = {
-        let inner = lock_state(&state);
+        let mut inner = lock_state(&state);
         if inner.writing {
             return Err(AppError::new("write_in_progress"));
         }
@@ -599,26 +608,27 @@ async fn save_and_exit(app: AppHandle, state: State<'_, AppState>) -> AppResult<
             .round
             .as_ref()
             .ok_or_else(|| AppError::new("no_round"))?;
-        (
-            round.new_layout_positions()?,
-            round.original_positions(),
-            round.mock,
-        )
+        let positions = round.new_layout_positions()?;
+        let original = round.original_positions();
+        let mock = round.mock;
+        inner.writing = true;
+        (positions, original, mock)
     };
+    // 从此处起 writing 已置位，任何提前返回都必须复位，否则应用卡在"写回中"。
     if mock {
         // 演示模式没有真实桌面快照，绝不允许走到写回路径。
+        lock_state(&state).writing = false;
         app.exit(0);
         return Ok(());
     }
     // 写回前备份原布局：备份写失败就不写桌面（没有后悔药就不动用户的桌面）。
-    write_layout_backup(&app, &original)?;
+    if let Err(err) = write_layout_backup(&app, &original) {
+        lock_state(&state).writing = false;
+        return Err(err);
+    }
     // 写回前先让真实图标回到桌面：apply_positions 需要图标可见，
     // 视觉上也更自然（图标当场移动到最终位置）。
     restore_desktop_icons(&app);
-    {
-        let mut inner = lock_state(&state);
-        inner.writing = true;
-    }
     // 写回可能耗时数秒（每项写入+读回校验），放阻塞线程池，期间 writing
     // 标志挡住退出与游戏命令，防止半残桌面。
     let outcome = tauri::async_runtime::spawn_blocking(move || {
@@ -645,12 +655,21 @@ async fn save_and_exit(app: AppHandle, state: State<'_, AppState>) -> AppResult<
                 }
             }
             Err(err) => {
-                let rolled_back = rollback_ok(&original);
-                Some(if rolled_back {
-                    AppError::with_detail("save_failed_restored", err.to_string())
+                // 写入前失败（自动排列/图标隐藏/标签读不到）时桌面一个字节都没动，
+                // 原样上报准确原因，不要谎报"恢复失败"。
+                if matches!(
+                    err.code.as_str(),
+                    "auto_arrange_on" | "icons_hidden" | "desktop_labels_unavailable"
+                ) {
+                    Some(err)
                 } else {
-                    AppError::with_detail("save_failed_partial", err.to_string())
-                })
+                    let rolled_back = rollback_ok(&original);
+                    Some(if rolled_back {
+                        AppError::with_detail("save_failed_restored", err.to_string())
+                    } else {
+                        AppError::with_detail("save_failed_partial", err.to_string())
+                    })
+                }
             }
         }
     })
@@ -673,7 +692,9 @@ async fn save_and_exit(app: AppHandle, state: State<'_, AppState>) -> AppResult<
 /// 回滚是否真的回到了原布局（逐项校验过才算）。
 fn rollback_ok(original: &[IconWrite]) -> bool {
     platform::apply_positions(original)
-        .map(|report| report.failed_write.is_empty())
+        // skipped_missing 非空 = 有原图标在桌面上找不到、没被移回原位，
+        // 不能算"已恢复原布局"。
+        .map(|report| report.failed_write.is_empty() && report.skipped_missing.is_empty())
         .unwrap_or(false)
 }
 

@@ -106,13 +106,16 @@ impl Default for LabelFont {
     }
 }
 
-/// 写回桌面的目标：以图标名为身份（玩到一半图标增删/改名都不会写错对象），
-/// 位置为该图标应落到的屏幕物理坐标。
+/// 写回桌面的目标：身份 = 图标名 + 原始位置（同名图标靠原位消歧，避免把
+/// A 的坐标写到同名的 B 上），x/y 为该图标应落到的屏幕物理坐标。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IconWrite {
     pub name: String,
     pub x: i32,
     pub y: i32,
+    /// 该图标在桌面上的原始位置（开局快照值）。
+    pub orig_x: i32,
+    pub orig_y: i32,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -285,11 +288,15 @@ mod tests {
                 name: "微信".into(),
                 x: 96,
                 y: 48,
+                orig_x: 96,
+                orig_y: 48,
             },
             IconWrite {
                 name: "README.lnk".into(),
                 x: -1920,
                 y: 0,
+                orig_x: -1920,
+                orig_y: 0,
             },
         ];
         let backup = LayoutBackup::from_positions("0.1.1", &original);
