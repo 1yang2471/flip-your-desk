@@ -15,7 +15,10 @@ pub fn probe() -> ProbeData {
     }
 }
 
-pub fn capture(_monitors: &[MonitorInfo]) -> AppResult<Captured> {
+pub fn capture(
+    _monitors: &[MonitorInfo],
+    _progress: impl Fn(usize, usize) + Send + Sync,
+) -> AppResult<Captured> {
     Err(AppError::new("unsupported_platform"))
 }
 
