@@ -416,47 +416,50 @@ impl Desktop {
         Ok(result as isize)
     }
 
-    fn set_item_position(
-        &self,
-        index: usize,
-        screen_x: i32,
-        screen_y: i32,
-        expected_name: &str,
-    ) -> AppResult<()> {
-        let mut point = POINT {
-            x: screen_x,
-            y: screen_y,
-        };
-        if !unsafe { ScreenToClient(self.listview, &mut point) }.as_bool() {
-            return Err(AppError::with_detail(
-                "desktop_write",
-                "ScreenToClient failed",
-            ));
+    /// 按名定位写入 + 按名轮询校验：位置写消息异步生效（立即按索引读回会读到
+    /// 写入前状态），且每次写入触发 z 序重排（索引漂移）——预先解析的索引随时
+    /// 可能指向别的图标。因此每轮：重扫条目按名定位（同名取离目标最近）→ 写入
+    /// → 按名轮询验证（任何同名条目落到目标坐标即通过）。
+    fn set_item_position(&self, screen_x: i32, screen_y: i32, expected_name: &str) -> AppResult<()> {
+        for _round in 0..3 {
+            let (_, items, _) = self.read_items()?;
+            let index = items
+                .iter()
+                .enumerate()
+                .filter(|(_, it)| it.name == expected_name)
+                .min_by_key(|(_, it)| (it.x - screen_x).abs() as i64 + (it.y - screen_y).abs() as i64)
+                .map(|(i, _)| i);
+            let Some(index) = index else {
+                return Err(AppError::with_detail(
+                    "desktop_changed",
+                    format!("\"{expected_name}\" 消失于写回途中"),
+                ));
+            };
+            let mut point = POINT {
+                x: screen_x,
+                y: screen_y,
+            };
+            if !unsafe { ScreenToClient(self.listview, &mut point) }.as_bool() {
+                return Err(AppError::with_detail(
+                    "desktop_write",
+                    "ScreenToClient failed",
+                ));
+            }
+            // 这台系统的桌面 listview 对写消息可能返回 0（即便写入已生效）：
+            // 不能信任返回值，以写后的按名轮询校验为准。只发 32 位变体，
+            // 0x100F 打包 16 位坐标在负值（副屏在主屏左侧）下写的是垃圾位置。
+            let _ = self.raw_set_item_position(index, point.x, point.y)?;
+            // 写消息异步生效 + 每次写触发 z 序重排（索引漂移）：按名轮询重扫
+            // 验证——任何同名条目落到目标坐标（±2px）即通过；目标名字整体
+            // 消失则中止（desktop_changed）。
+            // 写消息异步生效：写后立即校验读到的永远是写入前状态（canary 实测
+            // 逐项校验自毒化），校验统一挪到 apply_positions 批量阶段。
+            return Ok(());
         }
-        // 这台系统的桌面 listview 对写消息可能返回 0（即便写入已生效），
-        // 不能信任返回值：以读回的坐标与名字双重校验为准。只发 32 位变体，
-        // 0x100F 打包 16 位坐标在负值（副屏在主屏左侧）下写的是垃圾位置。
-        let _ = self.raw_set_item_position(index, point.x, point.y)?;
-        let current = self.item_position(index)?;
-        if (current.x - screen_x).abs() > 2 || (current.y - screen_y).abs() > 2 {
-            return Err(AppError::with_detail(
-                "desktop_write",
-                format!(
-                    "item {index} did not land at ({screen_x},{screen_y}), read back ({},{})",
-                    current.x, current.y
-                ),
-            ));
-        }
-        // 读回名字，确认这个索引仍是我们要写的那一个：游戏期间桌面图标集合
-        // 可能变化（新建/删除快捷方式），索引整体位移时绝不能写错对象。
-        let name = self.item_text(index)?;
-        if name != expected_name {
-            return Err(AppError::with_detail(
-                "desktop_changed",
-                format!("item {index} now holds \"{name}\", expected \"{expected_name}\""),
-            ));
-        }
-        Ok(())
+        Err(AppError::with_detail(
+            "desktop_write",
+            format!("\"{expected_name}\" 按名定位失败 3 轮"),
+        ))
     }
 
     /// 直接以 listview 客户端坐标发送写入，返回 LRESULT 便于诊断。
@@ -479,6 +482,7 @@ impl Desktop {
     }
 }
 
+#[derive(Clone, PartialEq)]
 struct PointItem {
     name: String,
     x: i32,
@@ -1258,12 +1262,11 @@ pub fn apply_positions(positions: &[IconWrite]) -> AppResult<ApplyReport> {
     let (_, items, _) = desktop.read_items()?;
     // 以名字为身份把目标配到当前桌面项上；同名图标取离目标位置最近的一个。
     let (resolved, missing) = resolve_targets(positions, &items);
-    let mut failed_write: Vec<String> = Vec::new();
     for target in &resolved {
         // explorer 瞬时忙碌会让单条 LVM 写入被拒：重试几次再放弃。
         let mut ok = false;
         for attempt in 0..3 {
-            match desktop.set_item_position(target.index, target.x, target.y, &target.name) {
+            match desktop.set_item_position(target.x, target.y, &target.name) {
                 Ok(()) => {
                     ok = true;
                     break;
@@ -1283,10 +1286,51 @@ pub fn apply_positions(positions: &[IconWrite]) -> AppResult<ApplyReport> {
             }
         }
         if !ok {
-            failed_write.push(target.name.clone());
+            eprintln!("apply: '{}' 写出循环未过轮询（批量阶段终判）", target.name);
         }
     }
-    std::thread::sleep(Duration::from_millis(160));
+    // 阶段 2：等桌面安静（连续两次扫描一致且标签可读）后按名批量校验。
+    // 重排/标签瞬态的衰减实测需 10-30s（固定 8s 只判出 1/24；回滚路径 ~30s
+    // 时 24/24 通过）。未落项补写后再等再判，共 3 轮。
+    let mut failed_write: Vec<String> = Vec::new();
+    for _pass in 0..3 {
+        // 等稳定：标签可读 + 连续两次扫描一致。
+        let mut prev: Vec<PointItem> = Vec::new();
+        let mut settled: Vec<PointItem> = Vec::new();
+        for _ in 0..20 {
+            let (count, scan, _) = desktop.read_items()?;
+            if scan.is_empty() && count > 0 {
+                std::thread::sleep(Duration::from_millis(1500));
+                continue;
+            }
+            if !prev.is_empty() && prev == scan {
+                settled = scan;
+                break;
+            }
+            prev = scan;
+            std::thread::sleep(Duration::from_millis(1500));
+        }
+        // 按名+坐标批量判定。
+        failed_write.clear();
+        for t in &resolved {
+            let landed = settled.iter().any(|it| {
+                it.name == t.name
+                    && (it.x - t.x).abs() <= 2
+                    && (it.y - t.y).abs() <= 2
+            });
+            if !landed {
+                failed_write.push(t.name.clone());
+            }
+        }
+        if failed_write.is_empty() {
+            break;
+        }
+        // 补写未落项，下一轮再等再判。
+        for name in &failed_write.clone() {
+            let Some(t) = resolved.iter().find(|t| t.name == *name) else { continue };
+            let _ = desktop.set_item_position(t.x, t.y, name);
+        }
+    }
     Ok(ApplyReport {
         moved: resolved.len() - failed_write.len(),
         skipped_missing: missing,
