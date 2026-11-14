@@ -14,13 +14,14 @@ import {
   t,
   type Lang,
 } from "./i18n";
-import type { EnvReport } from "./types";
+import type { CaptureProgress, EnvReport } from "./types";
 
 interface LauncherState {
   lang: Lang;
   env: EnvReport | null;
   probing: boolean;
   starting: boolean;
+  dealing: { done: number; total: number } | null;
   error: string | null;
   muted: boolean;
 }
@@ -40,6 +41,7 @@ export async function initLauncher(root: HTMLElement): Promise<void> {
     env: null,
     probing: true,
     starting: false,
+    dealing: null,
     error: null,
     muted: storedMuted(),
   };
@@ -101,11 +103,13 @@ export async function initLauncher(root: HTMLElement): Promise<void> {
     render();
     try {
       await api.startRound(state.lang, mode);
+      state.dealing = null;
     } catch (error) {
       const payload = asAppError(error);
       console.error("start failed", payload);
       state.error = errorText(state.lang, payload.code);
       state.starting = false;
+      state.dealing = null;
       render();
     }
   };
@@ -115,6 +119,10 @@ export async function initLauncher(root: HTMLElement): Promise<void> {
   void listen<{ code: string }>("start-failed", (event) => {
     state.starting = false;
     state.error = errorText(state.lang, event.payload.code);
+    render();
+  });
+  await listen<CaptureProgress>("capture-progress", (event) => {
+    state.dealing = event.payload;
     render();
   });
 }
@@ -328,7 +336,17 @@ function renderLauncher(
     const spinner = h("span", "spinner");
     spinner.setAttribute("aria-hidden", "true");
     startButton.appendChild(spinner);
-    startButton.appendChild(h("span", "", t(lang, "launcher.starting")));
+    startButton.appendChild(
+      h(
+        "span",
+        "",
+        t(
+          lang,
+          state.dealing ? "launcher.dealing" : "launcher.starting",
+          state.dealing ?? undefined,
+        ),
+      ),
+    );
   } else {
     startButton.appendChild(h("span", "", t(lang, "launcher.start")));
   }

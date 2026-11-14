@@ -24,6 +24,7 @@ export const zhCN = {
   "launcher.issueTitle": "开始前需要处理",
   "launcher.start": "开始游戏",
   "launcher.starting": "正在读取桌面…",
+  "launcher.dealing": "正在发牌 {done}/{total}",
   "launcher.startDisabled": "请先处理上面的问题",
   "launcher.demo": "演示模式（开发）",
   "launcher.howtoTitle": "玩法",

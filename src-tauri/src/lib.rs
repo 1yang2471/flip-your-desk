@@ -324,9 +324,13 @@ async fn start_round(
         game::mock_snapshot(&monitors)
     } else {
         let monitors_for_capture = monitors.clone();
+        let app_for_capture = app.clone();
         let captured = tauri::async_runtime::spawn_blocking(move || {
             platform::capture(&monitors_for_capture, |done, total| {
-                let _ = (done, total);
+                let _ = app_for_capture.emit(
+                    "capture-progress",
+                    serde_json::json!({ "done": done, "total": total }),
+                );
             })
         })
         .await

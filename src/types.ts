@@ -114,3 +114,8 @@ export interface AppErrorPayload {
   code: string;
   detail?: string | null;
 }
+
+export interface CaptureProgress {
+  done: number;
+  total: number;
+}

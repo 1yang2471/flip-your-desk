@@ -520,6 +520,18 @@ test("复制结算：剪贴板优先 navigator.clipboard，失败退回 execComm
   }
 });
 
+test("开局进度：launcher 订阅 capture-progress 并显示 n/N", () => {
+  const source = readFileSync(join(ROOT, "src/launcher.ts"), "utf8");
+  assert.match(source, /listen[<(]/, "launcher 需要 listen 导入");
+  assert.match(source, /capture-progress/, "订阅 capture-progress 事件");
+  assert.match(source, /launcher\.dealing/, "进度文案走 i18n");
+  const zh = readFileSync(join(ROOT, "src/locales/zh-CN.ts"), "utf8");
+  const en = readFileSync(join(ROOT, "src/locales/en-US.ts"), "utf8");
+  for (const f of [zh, en]) {
+    assert.ok(f.includes('"launcher.dealing"'), "dealing key 存在");
+  }
+});
+
 let failed = 0;
 try {
   await start();

@@ -26,6 +26,7 @@ export const enUS = {
   "launcher.issueTitle": "Fix these before starting",
   "launcher.start": "Start",
   "launcher.starting": "Reading your desktop…",
+  "launcher.dealing": "Dealing {done}/{total}",
   "launcher.startDisabled": "Fix the issues above first",
   "launcher.demo": "Demo mode (dev)",
   "launcher.howtoTitle": "How it works",
