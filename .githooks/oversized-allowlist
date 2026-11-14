@@ -1,9 +1,8 @@
 # 存量超标文件豁免清单（tidy：超标文件已列出交用户决定是否拆分，拆分前允许提交）
 # 每行一个路径；新增文件若超 20KB 必须被钩子拦下，不得加入本清单。
+# lockfile 由钩子 case 模式直接跳过，不进本清单。
 src-tauri/src/platform/windows.rs
 src-tauri/src/lib.rs
-src-tauri/Cargo.lock
-package-lock.json
 src/overlay.ts
 src/styles.css
 tests/ui.test.mjs
