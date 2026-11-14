@@ -15,8 +15,7 @@ use error::{AppError, AppResult};
 use game::Round;
 use model::{
     DragHover, EnvReport, IconWrite, LayoutBackup, MonitorInfo, OverlayView, PublicState,
-    RoundResult, Snapshot,
-    StartResponse,
+    RoundResult, Snapshot, StartResponse,
 };
 
 pub struct AppState {
@@ -404,11 +403,7 @@ async fn start_round(
     Ok(StartResponse {
         total,
         overlays: overlay_count,
-        limit_ms: if timed {
-            game::time_limit_ms(total)
-        } else {
-            0
-        },
+        limit_ms: if timed { game::time_limit_ms(total) } else { 0 },
     })
 }
 

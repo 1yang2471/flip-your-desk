@@ -418,14 +418,21 @@ impl Desktop {
 
     /// 按名定位写入 + 写后校验：每轮先重扫条目按名定位（同名取离目标最近），
     /// 避免索引漂移写错对象；写后按名读回校验落位（±2px）。
-    fn set_item_position(&self, screen_x: i32, screen_y: i32, expected_name: &str) -> AppResult<()> {
+    fn set_item_position(
+        &self,
+        screen_x: i32,
+        screen_y: i32,
+        expected_name: &str,
+    ) -> AppResult<()> {
         for _round in 0..3 {
             let (_, items, _) = self.read_items()?;
             let index = items
                 .iter()
                 .enumerate()
                 .filter(|(_, it)| it.name == expected_name)
-                .min_by_key(|(_, it)| (it.x - screen_x).abs() as i64 + (it.y - screen_y).abs() as i64)
+                .min_by_key(|(_, it)| {
+                    (it.x - screen_x).abs() as i64 + (it.y - screen_y).abs() as i64
+                })
                 .map(|(i, _)| i);
             let Some(index) = index else {
                 return Err(AppError::with_detail(
@@ -814,13 +821,13 @@ const LABEL_BAND_MAX_RATIO: f32 = 0.25;
 /// 桌面标签行带的最小起始占比（标签位于图标下方）。
 const LABEL_BAND_MIN_TOP_RATIO: f32 = 0.45;
 
+/// 行带区间 `[起, 止)`，用于图标区域与文字区域的切分。
+type Band = (usize, usize);
+
 /// 把行带切成「图标区域」与「尾部文字区域」。
 /// 文字行带判定：高度 ≤ 25% 格高且从 45% 格高以下开始；从底部往上连续剔除，
 /// 至少保留一个图标带（两行标签会产出两个文字带，必须全部剔除）。
-fn split_bands(
-    bands: &[(usize, usize)],
-    cell_h: usize,
-) -> (Option<(usize, usize)>, Option<(usize, usize)>) {
+fn split_bands(bands: &[Band], cell_h: usize) -> (Option<Band>, Option<Band>) {
     let max_label_h = ((cell_h as f32) * LABEL_BAND_MAX_RATIO).max(6.0) as usize;
     let min_label_top = ((cell_h as f32) * LABEL_BAND_MIN_TOP_RATIO) as usize;
     let mut remaining = bands;
@@ -828,7 +835,7 @@ fn split_bands(
     let mut label_end: Option<usize> = None;
     while remaining.len() > 1 {
         let (start, end) = remaining[remaining.len() - 1];
-        if end - start + 1 <= max_label_h && start >= min_label_top {
+        if end - start < max_label_h && start >= min_label_top {
             // 从下往上剥：bottom 记第一次（最下面一行），top 记最后一次（最上面一行）。
             if label_end.is_none() {
                 label_end = Some(end);
@@ -873,12 +880,12 @@ fn extract_cell(
     let cell_w = (right - left) as usize;
     let cell_h = (bottom - top) as usize;
     let mut row_has = vec![false; cell_h];
-    for yy in 0..cell_h {
+    for (yy, has_row) in row_has.iter_mut().enumerate() {
         for xx in 0..cell_w {
             if diff_at(with_icons, clean, left + xx as u32, top + yy as u32)
                 > icon_cutout::INFLUENCE_THRESHOLD
             {
-                row_has[yy] = true;
+                *has_row = true;
                 break;
             }
         }
@@ -1168,7 +1175,7 @@ pub fn capture(
                                 .map(|rect| rect.right - rect.left)
                                 .unwrap_or(cell.w);
                             let extract =
-                                extract_cell(&with_icons, &clean, origin, cell, label_width);
+                                extract_cell(with_icons, clean, origin, cell, label_width);
                             chunk.push(IconRecord {
                                 id: slot as u32,
                                 name: item.name.clone(),
@@ -1179,7 +1186,7 @@ pub fn capture(
                                     .unwrap_or_default(),
                                 cell,
                                 monitor,
-                                tone: tone_for_cell(&clean, origin, cell),
+                                tone: tone_for_cell(clean, origin, cell),
                                 label: extract.label,
                             });
                         }
@@ -1282,7 +1289,10 @@ pub fn apply_positions(positions: &[IconWrite]) -> AppResult<ApplyReport> {
                     if err.code == "desktop_changed" {
                         return Err(err);
                     }
-                    eprintln!("apply: write '{}' attempt {} failed: {}", target.name, attempt, err);
+                    eprintln!(
+                        "apply: write '{}' attempt {} failed: {}",
+                        target.name, attempt, err
+                    );
                     if attempt < 2 {
                         std::thread::sleep(Duration::from_millis(120));
                     }
@@ -1336,6 +1346,9 @@ fn resolve_targets(
 }
 
 struct ResolvedTarget {
+    /// 解析时的条目索引。生产路径已改为按名重定位（写入时索引可能已漂移），
+    /// 此字段仅用于测试断言「同名取最近」的配对结果。
+    #[cfg_attr(not(test), allow(dead_code))]
     index: usize,
     name: String,
     x: i32,
@@ -1427,7 +1440,7 @@ mod tests {
             primary: true,
         }];
         let spacing = (76, 100);
-        let items = vec![
+        let items = [
             item("onscreen-a", 10, 10),
             item("offscreen", 2000, 10),
             item("onscreen-b", 200, 10),

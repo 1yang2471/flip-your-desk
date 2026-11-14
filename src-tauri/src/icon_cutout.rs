@@ -27,6 +27,10 @@ pub struct Cutout {
     /// 抠出的图标（RGBA，含 alpha）。
     pub image: RgbaImage,
     /// image 左上角在输入图中的坐标（bbox 外扩后）。
+    ///
+    /// `origin_x` 生产路径有意不用：用户要求图标在卡内水平居中，水平偏移
+    /// 由调用方算（见 windows.rs 的 offset_x），不照搬 Explorer 的偏左布局。
+    #[allow(dead_code)]
     pub origin_x: u32,
     pub origin_y: u32,
 }
@@ -51,7 +55,7 @@ pub fn cutout(with_icons: &RgbaImage, clean: &RgbaImage) -> Option<Cutout> {
                 .abs()
                 .max((o[1] as i32 - b[1] as i32).abs())
                 .max((o[2] as i32 - b[2] as i32).abs())
-                .min(255) as i32;
+                .min(255);
             diff[y * w + x] = d;
             max_diff = max_diff.max(d);
         }
@@ -253,7 +257,7 @@ mod tests {
         for y in 0..h {
             for x in 0..w {
                 clean.put_pixel(x, y, Rgba([bg[0], bg[1], bg[2], 255]));
-                let inside = x >= 6 && x < 14 && y >= 6 && y < 14;
+                let inside = (6..14).contains(&x) && (6..14).contains(&y);
                 if inside {
                     // 合成：icon·α + bg·(1-α)
                     let a = alpha as u32;
@@ -370,7 +374,7 @@ mod tests {
         let (mut with, mut clean) = scene([0, 0, 0], [255, 255, 255], 255);
         for y in 6..14u32 {
             for x in 6..14u32 {
-                let v = 120 + (x as u32 - 6) * 18;
+                let v = 120 + (x - 6) * 18;
                 let v = v.min(255) as u8;
                 with.put_pixel(x, y, Rgba([v, v, v, 255]));
             }

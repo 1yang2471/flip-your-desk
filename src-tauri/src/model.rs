@@ -281,13 +281,27 @@ mod tests {
     #[test]
     fn layout_backup_round_trip() {
         let original = vec![
-            IconWrite { name: "微信".into(), x: 96, y: 48 },
-            IconWrite { name: "README.lnk".into(), x: -1920, y: 0 },
+            IconWrite {
+                name: "微信".into(),
+                x: 96,
+                y: 48,
+            },
+            IconWrite {
+                name: "README.lnk".into(),
+                x: -1920,
+                y: 0,
+            },
         ];
         let backup = LayoutBackup::from_positions("0.1.1", &original);
         let json = serde_json::to_string(&backup).expect("serialize");
-        assert!(json.contains("\"appVersion\""), "camelCase 键名必须稳定: {json}");
-        assert!(json.contains("\"savedAtUnix\""), "camelCase 键名必须稳定: {json}");
+        assert!(
+            json.contains("\"appVersion\""),
+            "camelCase 键名必须稳定: {json}"
+        );
+        assert!(
+            json.contains("\"savedAtUnix\""),
+            "camelCase 键名必须稳定: {json}"
+        );
         let parsed: LayoutBackup = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(parsed, backup);
         assert_eq!(parsed.icons.len(), 2);
