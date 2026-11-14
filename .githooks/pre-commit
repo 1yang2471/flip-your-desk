@@ -1,15 +1,20 @@
 #!/bin/sh
 # tidy: 单个提交文件超过 ~5000 token（20KB）就拒绝，请按功能拆分。
 # agent 不会读的文件跳过：lockfile、构建产物、二进制资产。
+# 存量超标文件在 oversized-allowlist 白名单里（拆分决定权在用户），不受拦截。
 MAX=20000
+ALLOWLIST="$(git rev-parse --show-toplevel)/.githooks/oversized-allowlist"
 fail=0
 for f in $(git diff --cached --name-only --diff-filter=ACMR); do
   case "$f" in
     *lock.json | Cargo.lock | *.png | *.gif | *.ico | *.jpg | *.jpeg | *.webp | *.svg | *.exe | *.msi) continue ;;
   esac
+  if [ -f "$ALLOWLIST" ] && grep -qxF "$f" "$ALLOWLIST"; then
+    continue
+  fi
   size=$(git cat-file -s ":$f" 2>/dev/null || wc -c < "$f")
   if [ "$size" -gt "$MAX" ]; then
-    echo "✗ 提交被拒：$f 为 $size 字节（> ${MAX}B ≈ 5000 token）。请按功能拆分后再提交，或与既有文件同风格归档。" >&2
+    echo "✗ 提交被拒：$f 为 $size 字节（> ${MAX}B ≈ 5000 token）。请按功能拆分后再提交；存量超标文件若已在 .githooks/oversized-allowlist 白名单则放行。" >&2
     fail=1
   fi
 done
