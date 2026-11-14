@@ -653,13 +653,11 @@ button {
   will-change: transform;
 }
 
+/* 卡片只用鼠标操作。focus 仅用于让 focusable(false) 的覆盖窗收到 keydown
+   （选中卡后按 Esc 取消），不画焦点环：它会和 .is-selected 的金框叠成两圈，
+   取消选中后还会残留一圈。HUD/弹窗按钮的焦点环不受影响。 */
 .card:focus-visible {
   outline: none;
-}
-
-.card:focus-visible .card-inner {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
 }
 
 /* 正反两面共用整格盒模型：卡背与卡面的可见盒必须同为整格（用户设定）。
@@ -675,7 +673,8 @@ button {
   border-radius: 12px;
   pointer-events: none;
   transition: transform 160ms var(--ease), box-shadow 160ms var(--ease),
-    outline-color 140ms var(--ease), backdrop-filter 160ms var(--ease);
+    outline-color 140ms var(--ease), backdrop-filter 160ms var(--ease),
+    rotate 320ms var(--ease);
 }
 
 .card-back-inner {
@@ -1253,6 +1252,13 @@ button {
 
 .card-back.revealing .card-back-inner {
   animation: card-reveal 320ms var(--ease) forwards !important;
+}
+
+/* 结算屏所有槽位都是正面卡：用独立的 rotate 属性翻走，不能替换 transform
+   动画（入场 card-flip-3d-in 的 forwards 状态撑着卡面可见性）。取消演出时
+   rotate 平滑转回 0，不会把入场翻转重播一遍。 */
+.card-face.revealing .card-face-inner {
+  rotate: y -180deg;
 }
 
 @media (prefers-reduced-motion: reduce) {

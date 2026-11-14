@@ -41,6 +41,8 @@
 > 修订记录（2026-11-14 审查后）：初版 A4 写了「假图标滑到目标槽位再淡出」，但实测发现 `--slide-x/--slide-y` 无 JS 赋值、且卡片定位靠内联 `transform` 压过 `.sliding` 类规则，滑行在真实 DOM 下既不滑也不淡。经用户拍板，**整项砍掉假滑行**（`.sliding` 类、`slide` 参数、`--slide-*` 变量全部移除），只保留「演完才发命令」这一有实际价值的语义。
 >
 > 修订记录（2026-11-14 手测后）：C1 摸鱼整项下线（见上），附带修掉启动窗切语言闪透明、选中卡叠两圈金边。
+>
+> 修订记录（2026-11-14 二轮手测后）：Esc 取消选卡在真实窗口失效——覆盖窗 `focusable(false)` 且卡片的 `pointerdown` 被 `preventDefault`，去掉 programmatic focus 后收不到 keydown。改为选中时恢复 `focus()`，卡片本身不画焦点环（避免与 `.is-selected` 叠圈），取消选中不 blur（保住下一次 Esc 的输入）。退出仪式在结算屏（全正面卡）无动画——`.revealing` 只匹配 `.card-back`；正面卡改用独立 `rotate` 属性翻走（不替换入场 `transform` 动画，取消可平滑转回），逐卡排期预留 320ms，保证最后一张也在 `REVEAL_MS` 内翻完。
 
 **明确不做**
 
@@ -103,8 +105,9 @@ reduced-motion 或 失焦(.veiled) 期间不触发
   → 按钮立即置 pending（沿用现有防重入）
   → choreography.play(then)
        ├ 取牌桌全部 .card（不只 backs：结算时多数槽位已是正面），按 slot 的 y/x 排序
+       ├ 卡背加 .revealing 演翻回；正面卡用独立 rotate 属性翻走（不顶掉入场动画）
        ├ 依次加 .revealing 演多米诺翻回
-       └ 全部完成（REVEAL_MS = 1000ms，reduced-motion 下 0ms）
+       └ 全部完成（REVEAL_MS = 1000ms，含最后一张 320ms 翻回；reduced-motion 下 0ms）
   → then() 才调用对应原有的 quit_app / restoreAndExit / saveAndExit
 ```
 

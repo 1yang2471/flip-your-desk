@@ -308,6 +308,9 @@ export class OverlayGame {
   /** 按 y/x 排序取牌桌全部卡片（结算时多数槽位已是正面，不能只取 backs），
    *  交给编排器演多米诺；动画期间不发任何游戏命令。 */
   private runExit(then: () => void): void {
+    // 退出演出开始前收掉选中金框与提示：正面卡等下会翻走，
+    // 留在 .card 上的选中框会变成一圈没有内容的空框。
+    this.clearSelection();
     const order = new Map<number, number>();
     [...this.view.slots]
       .sort((a, b) => a.y - b.y || a.x - b.x)
@@ -847,8 +850,10 @@ export class OverlayGame {
     const element = this.faces.get(iconId);
     if (element) {
       element.classList.add("is-selected");
-      // 不做 programmatic focus：这会让卡片吃到 :focus-visible 金边，
-      // 与 .is-selected 的金边叠成两圈（纯鼠标操作，不需要键盘焦点环）。
+      // 必须 programmatic focus：覆盖窗是 focusable(false)，pointerdown 又
+      // preventDefault 掉了默认聚焦；没有 DOM 焦点，覆盖窗收不到 Esc。
+      // 卡片不画焦点环（见 styles.css），不会与 .is-selected 叠成两圈。
+      element.focus({ preventScroll: true });
     }
     this.hudHint.hidden = false;
     this.hudHint.textContent = t(this.lang, "overlay.selected");
@@ -860,8 +865,8 @@ export class OverlayGame {
       const element = this.faces.get(this.selectedIcon);
       if (element) {
         element.classList.remove("is-selected");
-        // 兜底：若该卡仍持有 DOM 焦点，松掉，避免残留一层焦点金边。
-        if (document.activeElement === element) element.blur();
+        // 不 blur：焦点是覆盖窗继续收到下一次 Esc 的唯一来源，
+        // 松掉焦点可能让「再按 Esc 开退出确认」也失效。
       }
     }
     this.selectedIcon = null;
@@ -1201,6 +1206,9 @@ export class OverlayGame {
       cancel.addEventListener("click", () => this.hideExitConfirm());
       cancelPanel.appendChild(cancel);
       this.exitLayer.appendChild(cancelPanel);
+      // 「退出」按钮随旧面板一起被移除，焦点会掉到 body；把焦点交给
+      // 新的可见取消按钮，动画期间 Esc 才还能被覆盖窗收到。
+      cancel.focus({ preventScroll: true });
       this.runExit(() => {
         void api.quitApp().catch((error) => {
           this.pending = false;

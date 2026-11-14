@@ -647,6 +647,27 @@ test("ExitChoreography 行为：动画演完 then 执行一次", async () => {
   assert.equal(out.fired, 1, "then 由完成回调执行且只一次");
 });
 
+test("ExitChoreography 排期：40 张牌的最后一张也留足 320ms 翻回", async () => {
+  const out = await tsBehaviorTest("src/choreography.ts", `
+    const cards = Array.from({ length: 40 }, () => document.createElement('div'));
+    const started = performance.now();
+    let lastAdd = -1;
+    for (const card of cards) {
+      const add = card.classList.add.bind(card.classList);
+      card.classList.add = (cls) => {
+        if (cls === 'revealing') lastAdd = performance.now() - started;
+        return add(cls);
+      };
+    }
+    const c = new ExitChoreography(cards);
+    c.play(() => {});
+    return new Promise((resolve) => setTimeout(() => resolve({ lastAdd }), 1000));
+  `);
+  assert.ok(out.lastAdd >= 0, "最后一张确实被加上 revealing");
+  // 旧公式 1000/40 会让最后一张 975ms 才起演；新排期约 680ms。
+  assert.ok(out.lastAdd < 800, `最后一张起演 ${out.lastAdd.toFixed(0)}ms，需留足 320ms 翻回`);
+});
+
 test("动画期间 Esc 可取消（onKeyDown 不在 pending 时直接 return）", () => {
   const f = readFileSync(join(ROOT, "src/overlay.ts"), "utf8");
   const start = f.indexOf("private onKeyDown(");
@@ -698,13 +719,48 @@ test("启动窗 header：语言按钮与 tagline 不换行、按钮组不收缩"
   assert.equal(out.actionsShrink, "0", "按钮组不被压缩");
 });
 
-test("选中卡只有一圈金边：selectIcon 不做 programmatic focus", () => {
+test("选中卡只有一圈金边：focus 恢复以接收 Esc，卡片不画焦点环", async () => {
   const f = readFileSync(join(ROOT, "src/overlay.ts"), "utf8");
-  const block = f.slice(f.indexOf("private selectIcon("), f.indexOf("private clearSelection("));
-  assert.ok(block.includes('classList.add("is-selected")'), "选中仍加 is-selected 金边");
-  assert.ok(!/\.focus\(/.test(block), "不再 programmatic focus（否则叠出 :focus-visible 第二圈）");
-  const css = readFileSync(join(ROOT, "src/styles.css"), "utf8");
-  assert.match(css, /\.card\.is-selected\s*\{[^}]*outline:/, "is-selected 自身有金边");
+  const select = f.slice(f.indexOf("private selectIcon("), f.indexOf("private clearSelection("));
+  assert.ok(select.includes('classList.add("is-selected")'), "选中仍加 is-selected 金边");
+  assert.match(select, /element\.focus\(/, "恢复 programmatic focus（否则 focusable(false) 覆盖窗收不到 Esc）");
+  const clear = f.slice(f.indexOf("private clearSelection("), f.indexOf("private commitSelection("));
+  assert.ok(!/\.blur\(/.test(clear), "取消选中不 blur（保住覆盖窗的下一次键盘输入）");
+
+  const out = await fresh(`(() => {
+    const face = document.getElementById('face');
+    const inner = document.getElementById('faceInner');
+    face.classList.add('is-selected');
+    face.focus({ preventScroll: true });
+    return {
+      active: document.activeElement.id,
+      cardOutline: getComputedStyle(face).outlineStyle,
+      innerOutline: getComputedStyle(inner).outlineStyle,
+    };
+  })()`);
+  assert.equal(out.active, "face", "选中卡拿到 DOM 焦点");
+  assert.equal(out.cardOutline, "solid", `选中金框画在 .card 上（实测 ${out.cardOutline}）`);
+  // 比较 outline-style 而不是 width：outline: none 时 Chrome 仍报初始宽度 3px。
+  assert.equal(out.innerOutline, "none", `不再叠 :focus-visible 第二圈（实测 ${out.innerOutline}）`);
+});
+
+test("退出仪式在结算屏也生效：正面卡逐张翻走，取消可平滑转回", async () => {
+  const out = await fresh(`(async () => {
+    const face = document.getElementById('face');
+    const inner = document.getElementById('faceInner');
+    const before = getComputedStyle(inner).rotate;
+    face.classList.add('revealing');
+    await new Promise((r) => setTimeout(r, 450));
+    const after = getComputedStyle(inner).rotate;
+    const anim = getComputedStyle(inner).animationName;
+    face.classList.remove('revealing');
+    await new Promise((r) => setTimeout(r, 450));
+    return { before, after, anim, restored: getComputedStyle(inner).rotate };
+  })()`);
+  assert.equal(out.before, "none", "正面卡初始不旋转");
+  assert.equal(out.after, "y -180deg", "revealing 后翻到背面（露出真图标）");
+  assert.equal(out.anim, "card-flip-3d-in", "入场动画未被替换，取消不会重播");
+  assert.equal(out.restored, "none", "取消后平滑转回正面");
 });
 
 test("启动窗重渲染不重播入场淡入（切语言不闪透明）", () => {
