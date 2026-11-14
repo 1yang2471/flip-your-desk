@@ -132,6 +132,8 @@ fn build_env_report(app: &AppHandle, muted: bool) -> AppResult<EnvReport> {
             issues.push("too_few_icons".to_string());
         }
     }
+    // Fences 类整理工具只做非阻塞提示：不进 issues，否则会禁用启动按钮。
+    let organizer_detected = platform::detect_desktop_organizers();
     Ok(EnvReport {
         platform: if cfg!(windows) {
             "windows".into()
@@ -146,6 +148,7 @@ fn build_env_report(app: &AppHandle, muted: bool) -> AppResult<EnvReport> {
         monitors,
         muted,
         issues,
+        organizer_detected,
     })
 }
 

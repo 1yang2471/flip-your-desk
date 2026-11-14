@@ -129,6 +129,8 @@ pub struct EnvReport {
     pub muted: bool,
     /// 稳定的问题码，前端负责本地化文案。
     pub issues: Vec<String>,
+    /// 检测到第三方桌面整理工具（非阻塞提示，由前端展示）。
+    pub organizer_detected: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]

@@ -22,6 +22,8 @@ export const zhCN = {
   "launcher.checking": "检测中",
   "launcher.needsAttention": "需要处理",
   "launcher.issueTitle": "开始前需要处理",
+  "launcher.organizerTitle": "检测到桌面整理工具",
+  "launcher.organizerHint": "Fences 类工具可能移动图标，建议先关闭其布局锁定再开局。",
   "launcher.start": "开始游戏",
   "launcher.starting": "正在读取桌面…",
   "launcher.dealing": "正在发牌 {done}/{total}",

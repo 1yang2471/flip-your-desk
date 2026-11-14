@@ -532,6 +532,21 @@ test("开局进度：launcher 订阅 capture-progress 并显示 n/N", () => {
   }
 });
 
+test("Fences 提示：organizerDetected 非阻塞，文案双语就位", () => {
+  const source = readFileSync(join(ROOT, "src/launcher.ts"), "utf8");
+  assert.match(source, /organizerDetected/, "launcher 渲染 organizerDetected");
+  const zh = readFileSync(join(ROOT, "src/locales/zh-CN.ts"), "utf8");
+  const en = readFileSync(join(ROOT, "src/locales/en-US.ts"), "utf8");
+  for (const f of [zh, en]) {
+    assert.ok(f.includes('"launcher.organizerTitle"'), "organizerTitle key 存在");
+    assert.ok(f.includes('"launcher.organizerHint"'), "organizerHint key 存在");
+  }
+  const rust = readFileSync(join(ROOT, "src-tauri/src/lib.rs"), "utf8");
+  assert.match(rust, /detect_desktop_organizers/, "后端探测已接线");
+  const model = readFileSync(join(ROOT, "src-tauri/src/model.rs"), "utf8");
+  assert.match(model, /organizer_detected/, "EnvReport 含 organizer_detected");
+});
+
 let failed = 0;
 try {
   await start();

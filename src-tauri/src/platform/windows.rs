@@ -1192,6 +1192,46 @@ pub fn capture(
     Ok(Captured { icons, label_font })
 }
 
+/// 命中桌面整理工具的进程映像名（只读判断，路径/大小写不敏感）。
+fn organizer_matches(image: &str) -> bool {
+    let lower = image.to_lowercase();
+    lower.ends_with("fences.exe") || lower.ends_with("desktops.exe")
+}
+
+/// 枚举进程快照检测 Fences 类桌面整理工具。只读，任何失败都按未检测到处理。
+pub fn detect_desktop_organizers() -> bool {
+    use windows::Win32::System::Diagnostics::ToolHelp as th;
+    unsafe {
+        let Ok(handle) = th::CreateToolhelp32Snapshot(th::TH32CS_SNAPPROCESS, 0) else {
+            return false;
+        };
+        let mut found = false;
+        let mut entry = th::PROCESSENTRY32W {
+            dwSize: std::mem::size_of::<th::PROCESSENTRY32W>() as u32,
+            ..Default::default()
+        };
+        if th::Process32FirstW(handle, &mut entry).is_ok() {
+            loop {
+                let len = entry
+                    .szExeFile
+                    .iter()
+                    .position(|c| *c == 0)
+                    .unwrap_or(entry.szExeFile.len());
+                let name = String::from_utf16_lossy(&entry.szExeFile[..len]);
+                if organizer_matches(&name) {
+                    found = true;
+                    break;
+                }
+                if !th::Process32NextW(handle, &mut entry).is_ok() {
+                    break;
+                }
+            }
+        }
+        let _ = CloseHandle(handle);
+        found
+    }
+}
+
 pub fn apply_positions(positions: &[IconWrite]) -> AppResult<ApplyReport> {
     let desktop = Desktop::open()?;
     if !desktop.icons_visible() {
@@ -1585,5 +1625,15 @@ mod consolidation_tests {
             assert_eq!(ranges.last().unwrap().end, total);
             assert!(ranges.windows(2).all(|w| w[0].end == w[1].start));
         }
+    }
+
+    #[test]
+    fn organizer_matches_by_image_name() {
+        assert!(organizer_matches("fences.exe"));
+        assert!(organizer_matches("Fences.EXE"));
+        assert!(organizer_matches("C:\\Tools\\desktops.exe"));
+        assert!(!organizer_matches("explorer.exe"));
+        assert!(!organizer_matches("fences_helper.dll"));
+        assert!(!organizer_matches("my_fences.exe.bak"));
     }
 }

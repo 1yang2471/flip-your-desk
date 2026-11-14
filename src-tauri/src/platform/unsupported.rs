@@ -37,3 +37,7 @@ pub fn set_icons_visible(_visible: bool) -> AppResult<()> {
 pub fn pin_window_over_desktop(_hwnd: isize) -> AppResult<()> {
     Err(AppError::new("unsupported_platform"))
 }
+
+pub fn detect_desktop_organizers() -> bool {
+    false
+}

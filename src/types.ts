@@ -21,6 +21,8 @@ export interface EnvReport {
   monitors: MonitorInfo[];
   muted: boolean;
   issues: string[];
+  /** 检测到第三方桌面整理工具（非阻塞提示）。 */
+  organizerDetected: boolean;
 }
 
 /** 桌面标签的几何（CSS 像素，相对单元格）。 */

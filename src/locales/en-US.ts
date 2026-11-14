@@ -24,6 +24,8 @@ export const enUS = {
   "launcher.checking": "Checking",
   "launcher.needsAttention": "Needs attention",
   "launcher.issueTitle": "Fix these before starting",
+  "launcher.organizerTitle": "Desktop organizer detected",
+  "launcher.organizerHint": "Tools like Fences may move icon positions; disable their layout lock before starting.",
   "launcher.start": "Start",
   "launcher.starting": "Reading your desktop…",
   "launcher.dealing": "Dealing {done}/{total}",

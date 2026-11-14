@@ -292,6 +292,18 @@ function renderLauncher(
     panel.appendChild(issues);
   }
 
+  if (env && env.organizerDetected && env.issues.length === 0) {
+    const notes = h("div", "issue-list");
+    const item = h("div", "issue");
+    item.appendChild(iconEl("alert", 13));
+    const text = h("div", "issue-text");
+    text.appendChild(h("p", "issue-name", t(lang, "launcher.organizerTitle")));
+    text.appendChild(h("p", "issue-hint", t(lang, "launcher.organizerHint")));
+    item.appendChild(text);
+    notes.appendChild(item);
+    panel.appendChild(notes);
+  }
+
   if (env && env.probeError) {
     // 探测失败时 icon_count 不可信，直接展示真实错误码文案。
     const error = h("div", "inline-error");
