@@ -24,10 +24,9 @@ Flip every desktop icon face down, draw the real icons back at random, and put e
 
 Grab a build from [Releases](https://github.com/1yang2471/flip-your-desk/releases):
 
-- `Flip Your Desk_0.1.0_x64-setup.exe`: NSIS installer for the current user
-- `Flip Your Desk_0.1.0_x64-setup.msi`: MSI package, when available
+- `Flip.Your.Desk_0.1.1_x64-setup.exe`: NSIS installer for the current user
 
-You can also run the portable `flip-your-desk.exe` directly (requires the Microsoft Edge WebView2 runtime, which ships with Windows 11).
+The installed program `flip-your-desk.exe` requires the Microsoft Edge WebView2 runtime (ships with Windows 11).
 
 ## How to play
 
@@ -44,16 +43,9 @@ You can also run the portable `flip-your-desk.exe` directly (requires the Micros
 
 The app detects both states and tells you how to fix them; it never changes your system settings for you.
 
-## Keyboard
+## Controls
 
-| Action | Key |
-| --- | --- |
-| Draw a card | Tab to a slot, then Enter or Space |
-| Pick up an icon | Tab to an icon, then Enter |
-| Choose a slot | Arrow keys |
-| Drop the icon | Enter |
-| Cancel the selection | Esc |
-| End the round | Esc (asks first) |
+Mouse only: left-click a slot to draw a card, drag icons to swap positions. Esc only opens the exit confirmation dialog — there is no keyboard play.
 
 ## Privacy
 

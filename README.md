@@ -24,10 +24,9 @@
 
 从 [Releases](https://github.com/1yang2471/flip-your-desk/releases) 下载：
 
-- `Flip Your Desk_0.1.0_x64-setup.exe`：安装版（NSIS，为当前用户安装）
-- `Flip Your Desk_0.1.0_x64-setup.msi`：MSI 安装包（如有）
+- `Flip.Your.Desk_0.1.1_x64-setup.exe`：安装版（NSIS，为当前用户安装）
 
-也可以直接运行便携版 `flip-your-desk.exe`（需要系统已安装 Microsoft Edge WebView2 运行时，Windows 11 自带）。
+安装后的主程序 `flip-your-desk.exe` 需要 Microsoft Edge WebView2 运行时（Windows 11 自带）。
 
 ## 使用
 
@@ -44,16 +43,9 @@
 
 应用检测到这两种状态时会在启动窗里给出对应提示，不会替你改系统设置。
 
-## 键盘操作
+## 操作
 
-| 操作 | 按键 |
-| --- | --- |
-| 抽牌 | Tab 聚焦到卡位后回车 / 空格 |
-| 拿起图标 | Tab 聚焦到图标后回车 |
-| 选择目标位置 | 方向键 |
-| 放下图标 | 回车 |
-| 取消选择 | Esc |
-| 结束本局 | Esc（需二次确认） |
+纯鼠标操作：左键点击卡位抽牌，拖动图标换位。Esc 仅打开退出确认弹窗，无其他键盘操作。
 
 ## 隐私
 

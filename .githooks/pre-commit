@@ -18,4 +18,20 @@ for f in $(git diff --cached --name-only --diff-filter=ACMR); do
     fail=1
   fi
 done
+
+# 发版一致性：README 安装节必须引用与 package.json 同版本的安装包名（v0.1.1 曾漏改 README，防复发）。
+# 查提交树（:file）；文件未入 index 时回退工作区文件。
+version=$(grep -m1 '"version"' package.json | sed 's/[^0-9.]*\([0-9][0-9.]*\).*/\1/')
+case "$version" in
+  '' | *[!0-9.]*)
+    echo "✗ 提交被拒：无法从 package.json 读到版本号，无法检查 README 安装节一致性。" >&2
+    exit 1 ;;
+esac
+for f in README.md README.en.md; do
+  content=$(git show ":$f" 2>/dev/null || cat "$f")
+  if ! printf '%s' "$content" | grep -qF "Desk_${version}_x64"; then
+    echo "✗ 提交被拒：$f 安装节未引用与 package.json 同版本（$version）的安装包名（形如 Flip.Your.Desk_${version}_x64-setup.exe）。发版 bump 时需同步更新 README.md / README.en.md 安装节。" >&2
+    fail=1
+  fi
+done
 exit $fail
