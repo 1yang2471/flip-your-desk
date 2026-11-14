@@ -28,7 +28,7 @@ interface LauncherState {
 
 interface LauncherActions {
   recheck: () => void;
-  start: (mode: "real" | "mock") => void;
+  start: (mode: "real" | "mock", timed?: boolean) => void;
   toggleLang: () => void;
   toggleMute: () => void;
   minimize: () => void;
@@ -48,7 +48,7 @@ export async function initLauncher(root: HTMLElement): Promise<void> {
 
   const actions: LauncherActions = {
     recheck: () => void probe(),
-    start: (mode) => void start(mode),
+    start: (mode, timed) => void start(mode, timed),
     toggleLang: () => {
       const next: Lang = state.lang === "zh-CN" ? "en-US" : "zh-CN";
       state.lang = next;
@@ -97,12 +97,12 @@ export async function initLauncher(root: HTMLElement): Promise<void> {
     render();
   };
 
-  const start = async (mode: "real" | "mock") => {
+  const start = async (mode: "real" | "mock", timed = false) => {
     state.starting = true;
     state.error = null;
     render();
     try {
-      await api.startRound(state.lang, mode);
+      await api.startRound(state.lang, mode, timed);
       state.dealing = null;
     } catch (error) {
       const payload = asAppError(error);
@@ -364,6 +364,16 @@ function renderLauncher(
   }
   startButton.addEventListener("click", () => actions.start("real"));
   body.appendChild(startButton);
+
+  const timedButton = h(
+    "button",
+    "timed-button",
+    t(lang, "launcher.timed"),
+  ) as HTMLButtonElement;
+  timedButton.type = "button";
+  timedButton.disabled = blocked || state.starting;
+  timedButton.addEventListener("click", () => actions.start("real", true));
+  body.appendChild(timedButton);
 
   if (blocked && env && env.issues.length > 0) {
     body.appendChild(h("p", "start-hint", t(lang, "launcher.startDisabled")));

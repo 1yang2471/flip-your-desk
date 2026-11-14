@@ -78,6 +78,7 @@ export interface RoundResult {
   accuracy: number;
   elapsedMs: number;
   moves: number;
+  timedOut: boolean;
 }
 
 export interface PublicState {
@@ -85,6 +86,7 @@ export interface PublicState {
   remaining: number;
   moves: number;
   startedAtMs: number;
+  limitMs: number;
   finished: boolean;
   result: RoundResult | null;
   muted: boolean;

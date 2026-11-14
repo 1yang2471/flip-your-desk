@@ -253,6 +253,10 @@ export class OverlayGame {
   // --------------------------------------------------------------- events
 
   private clockTimer: number | null = null;
+  /** 超时自动结算只触发一次（心跳每秒跑，避免重复 invoke）。 */
+  private timingOut = false;
+  /** 限时倒计时的本地起点（ms）；0 = 尚未开始。 */
+  private timedStartedAt = 0;
   private unlisteners: Array<() => void> = [];
   private readonly onKeyDownBound = (event: KeyboardEvent) => this.onKeyDown(event);
 
@@ -397,6 +401,29 @@ export class OverlayGame {
       : this.state.startedAtMs > 0
         ? Date.now() - this.state.startedAtMs
         : 0;
+    // 限时模式：倒计时 + 最后 20% 变色；到点自动结算（只触发一次）。
+    // 起点以本窗口首次看到 limitMs 的时刻为准：后端 startedAtMs 在发牌路径上
+    // 可能为 0（实测 canary 上倒计时会卡在满值），前端自持起点更可靠。
+    const limit = this.state.limitMs;
+    if (limit > 0 && !this.state.finished) {
+      if (this.timedStartedAt === 0) this.timedStartedAt = Date.now();
+      const left = Math.max(0, limit - (Date.now() - this.timedStartedAt));
+      this.hudTime.textContent = t(
+        this.lang,
+        "hud.timeLeft",
+        { time: formatDuration(left) },
+      );
+      this.hudTime.classList.toggle("time-low", left <= limit * 0.2);
+      if (left === 0 && !this.timingOut) {
+        this.timingOut = true;
+        this.hudTime.textContent = t(this.lang, "hud.timeUp");
+        void api
+          .finishRound(true)
+          .catch((error: unknown) => console.error("timeout finish failed", error));
+      }
+      return;
+    }
+    this.hudTime.classList.remove("time-low");
     this.hudTime.textContent = formatDuration(elapsed);
   }
 
@@ -873,6 +900,9 @@ export class OverlayGame {
     panel.setAttribute("aria-modal", "true");
 
     panel.appendChild(h("p", "modal-title", t(this.lang, "result.title")));
+    if (result.timedOut) {
+      panel.appendChild(h("p", "modal-timed-out", t(this.lang, "result.timedOut")));
+    }
     const figure = h("div", "result-figure");
     figure.appendChild(h("span", "result-label", t(this.lang, "result.accuracy")));
     const number = h("span", "result-value");

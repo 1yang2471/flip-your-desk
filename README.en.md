@@ -32,6 +32,7 @@ The installed program `flip-your-desk.exe` requires the Microsoft Edge WebView2 
 
 1. Open the app and check that the environment panel says Ready
 2. Hit Start; the desktop is covered and every icon becomes a `?`
+   - Or hit **Timed challenge**: the limit scales with icon count (30s + 5s per icon — 24 icons = 2:30), the HUD counts down, and the round settles automatically when time runs out
 3. Click a slot to draw an icon, drag icons to where you remember them
 4. Once every card is drawn, hit Confirm
 5. Pick Play again, Save new layout or Restore original

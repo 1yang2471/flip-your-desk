@@ -447,6 +447,53 @@ button {
   outline-color: var(--accent);
 }
 
+/* 限时挑战：与主行动区分，用细描边次级样式（金色留给「开始游戏」）。 */
+.timed-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 44px;
+  margin-top: 8px;
+  padding: 0 18px;
+  border: 1px solid rgba(238, 192, 108, 0.55);
+  border-radius: 12px;
+  background: transparent;
+  color: var(--accent);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 140ms var(--ease), border-color 140ms var(--ease);
+}
+
+.timed-button:hover {
+  border-color: var(--accent);
+  background: rgba(238, 192, 108, 0.1);
+}
+
+.timed-button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.timed-button:focus-visible {
+  outline-color: var(--accent);
+}
+
+/* 限时剩余时间进入最后 20%：金色警示（不闪烁，尊重 reduced-motion）。 */
+.hud-time.time-low {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+/* 结算界面的「超时结束」标记。 */
+.modal-timed-out {
+  margin: 4px 0 0;
+  color: var(--accent);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+}
+
 /* 视觉尺寸保持紧凑，但命中区统一扩到 44×44（项目自定可及性下限）。
    用透明伪元素，不影响布局与外观。 */
 .icon-button,

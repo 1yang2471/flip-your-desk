@@ -10,6 +10,11 @@ use crate::model::{
     OverlayView, PublicState, RectI, RoundResult, Snapshot, Tone,
 };
 
+/// 限时公式：T = (30 + 5 × 图标数) 秒。常量集中此处，实测后可调。
+pub fn time_limit_ms(icon_count: usize) -> u64 {
+    (30 + 5 * icon_count as u64) * 1000
+}
+
 #[derive(Debug, Clone)]
 pub struct Round {
     pub snapshot: Snapshot,
@@ -23,10 +28,12 @@ pub struct Round {
     pub locale: String,
     pub muted: bool,
     pub mock: bool,
+    /// 限时模式：true 时 HUD 倒计时、超时自动结算（前端心跳到点触发 finish_timed_out）。
+    pub timed: bool,
 }
 
 impl Round {
-    pub fn new(snapshot: Snapshot, locale: String, muted: bool, mock: bool) -> Self {
+    pub fn new(snapshot: Snapshot, locale: String, muted: bool, mock: bool, timed: bool) -> Self {
         let mut pool: Vec<u32> = snapshot.icons.iter().map(|icon| icon.id).collect();
         pool.shuffle(&mut thread_rng());
         Self {
@@ -40,6 +47,7 @@ impl Round {
             locale,
             muted,
             mock,
+            timed,
         }
     }
 
@@ -127,6 +135,41 @@ impl Round {
             accuracy,
             elapsed_ms,
             moves: self.moves,
+            timed_out: false,
+        };
+        self.result = Some(result.clone());
+        Ok(result)
+    }
+
+    /// 限时模式：时间耗尽的结算——绕过正常 finish 的两个拒绝条件（池清空/
+    /// 槽位填满），只计已放对的；未放的槽位计为错。elapsed = 限时公式值。
+    pub fn finish_timed_out(&mut self) -> AppResult<RoundResult> {
+        if !self.timed {
+            return Err(AppError::new("not_timed"));
+        }
+        if self.result.is_some() {
+            return self
+                .result
+                .clone()
+                .ok_or_else(|| AppError::new("round_finished"));
+        }
+        let limit = time_limit_ms(self.total());
+        let total = self.total();
+        let correct = (0..total)
+            .filter(|&slot| self.placements[slot] == Some(slot as u32))
+            .count();
+        let accuracy = if total == 0 {
+            0
+        } else {
+            ((correct as f64 / total as f64) * 100.0).round() as u32
+        };
+        let result = RoundResult {
+            correct,
+            total,
+            accuracy,
+            elapsed_ms: limit,
+            moves: self.moves,
+            timed_out: true,
         };
         self.result = Some(result.clone());
         Ok(result)
@@ -149,6 +192,11 @@ impl Round {
             remaining: self.pool.len(),
             moves: self.moves,
             started_at_ms: self.started_at_ms,
+            limit_ms: if self.timed {
+                time_limit_ms(self.total())
+            } else {
+                0
+            },
             finished: self.result.is_some(),
             result: self.result.clone(),
             muted: self.muted,
@@ -350,7 +398,7 @@ mod tests {
 
     fn test_round() -> Round {
         let snapshot = mock_snapshot(&test_monitors());
-        let mut round = Round::new(snapshot, "zh-CN".into(), true, true);
+        let mut round = Round::new(snapshot, "zh-CN".into(), true, true, false);
         round.begin();
         round
     }
@@ -374,6 +422,42 @@ mod tests {
         let mut round = test_round();
         round.draw(0).unwrap();
         assert_eq!(round.finish().unwrap_err().code, "not_all_drawn");
+    }
+
+    #[test]
+    fn time_limit_formula_centered() {
+        assert_eq!(time_limit_ms(24), 150_000);
+        assert_eq!(time_limit_ms(1), 35_000);
+        assert_eq!(time_limit_ms(120), 630_000);
+    }
+
+    #[test]
+    fn timeout_finish_scores_placed_only_and_marks_timeout() {
+        let snapshot = mock_snapshot(&test_monitors());
+        let mut round = Round::new(snapshot, "zh-CN".into(), true, true, true);
+        round.begin();
+        round.draw(0).unwrap();
+        round.placements[0] = Some(0);
+        // 池未清空、槽位未填满——超时结算绕过两个拒绝条件，只计已放好的。
+        let result = round.finish_timed_out().unwrap();
+        assert!(result.timed_out);
+        assert_eq!(result.correct, 1);
+        assert_eq!(result.total, round.total());
+        assert_eq!(result.elapsed_ms, time_limit_ms(round.total()));
+    }
+
+    #[test]
+    fn normal_finish_still_rejects_and_reports_no_timeout() {
+        let mut round = test_round();
+        round.draw(0).unwrap();
+        assert_eq!(round.finish().unwrap_err().code, "not_all_drawn");
+        let mut round = test_round();
+        let total = round.total();
+        for slot in 0..total {
+            round.draw(slot as u32).unwrap();
+        }
+        let result = round.finish().unwrap();
+        assert!(!result.timed_out);
     }
 
     #[test]

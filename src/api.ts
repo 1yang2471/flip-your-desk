@@ -26,8 +26,8 @@ export function asAppError(error: unknown): AppErrorPayload {
 
 export const api = {
   probeEnvironment: () => invoke<EnvReport>("probe_environment"),
-  startRound: (locale: string, mode: "real" | "mock") =>
-    invoke<StartResponse>("start_round", { locale, mode }),
+  startRound: (locale: string, mode: "real" | "mock", timed: boolean) =>
+    invoke<StartResponse>("start_round", { locale, mode, timed }),
   overlayReady: (monitor: number) => invoke<void>("overlay_ready", { monitor }),
   getOverlayView: (monitor: number) =>
     invoke<OverlayView>("get_overlay_view", { monitor }),
@@ -35,7 +35,8 @@ export const api = {
   moveCard: (fromSlot: number, toSlot: number) =>
     invoke<void>("move_card", { fromSlot, toSlot }),
   setDragHover: (slot: number | null) => invoke<void>("set_drag_hover", { slot }),
-  finishRound: () => invoke<RoundResult>("finish_round"),
+  finishRound: (timedOut = false) =>
+    invoke<RoundResult>("finish_round", { timedOut }),
   replayRound: () => invoke<void>("replay_round"),
   setMuted: (muted: boolean) => invoke<void>("set_muted", { muted }),
   saveAndExit: () => invoke<void>("save_and_exit"),

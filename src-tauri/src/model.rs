@@ -141,6 +141,7 @@ pub struct RoundResult {
     pub accuracy: u32,
     pub elapsed_ms: u64,
     pub moves: u32,
+    pub timed_out: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -150,6 +151,8 @@ pub struct PublicState {
     pub remaining: usize,
     pub moves: u32,
     pub started_at_ms: u64,
+    /// 限时值（毫秒）；0 = 未限时。前端倒计时与超时触发都以此为准。
+    pub limit_ms: u64,
     pub finished: bool,
     pub result: Option<RoundResult>,
     pub muted: bool,
@@ -229,6 +232,7 @@ pub struct DragHover {
 pub struct StartResponse {
     pub total: usize,
     pub overlays: usize,
+    pub limit_ms: u64,
 }
 
 /// 布局备份：保存新布局写回前写入 app_config_dir/original-layout.json，供人工恢复。

@@ -331,6 +331,7 @@ async fn start_round(
     state: State<'_, AppState>,
     locale: String,
     mode: String,
+    timed: bool,
 ) -> AppResult<StartResponse> {
     let monitors = monitors_of(&app, true)?;
     let mock = mode == "mock";
@@ -383,7 +384,7 @@ async fn start_round(
         (muted, inner.start_token)
     };
 
-    let round = Round::new(snapshot, locale, muted, mock);
+    let round = Round::new(snapshot, locale, muted, mock, timed);
     let total = round.total();
     let overlay_count = monitors.len();
     {
@@ -403,6 +404,11 @@ async fn start_round(
     Ok(StartResponse {
         total,
         overlays: overlay_count,
+        limit_ms: if timed {
+            game::time_limit_ms(total)
+        } else {
+            0
+        },
     })
 }
 
@@ -529,14 +535,22 @@ fn set_drag_hover(app: AppHandle, slot: Option<u32>) {
 }
 
 #[tauri::command]
-fn finish_round(app: AppHandle, state: State<'_, AppState>) -> AppResult<RoundResult> {
+fn finish_round(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    timed_out: bool,
+) -> AppResult<RoundResult> {
     let (result, public) = {
         let mut inner = lock_state(&state);
         let round = inner
             .round
             .as_mut()
             .ok_or_else(|| AppError::new("no_round"))?;
-        let result = round.finish()?;
+        let result = if timed_out {
+            round.finish_timed_out()?
+        } else {
+            round.finish()?
+        };
         (result, round.public_state())
     };
     emit_state(&app, &public);
