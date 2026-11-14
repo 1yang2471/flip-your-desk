@@ -622,6 +622,10 @@ async function tsBehaviorTest(relPath, expression) {
 
 test("ExitChoreography 行为：cancel 后 then 绝不执行、逐卡类被清干净", async () => {
   const out = await tsBehaviorTest("src/choreography.ts", `
+    const _mm = window.matchMedia.bind(window);
+    window.matchMedia = (q) => q.includes('prefers-reduced-motion')
+      ? { matches: false, media: q, addEventListener(){}, removeEventListener(){}, addListener(){}, removeListener(){}, onchange: null, dispatchEvent(){ return false; } }
+      : _mm(q);
     const card = document.getElementById('back');
     let fired = 0;
     const c = new ExitChoreography([card]);
@@ -649,6 +653,10 @@ test("ExitChoreography 行为：动画演完 then 执行一次", async () => {
 
 test("ExitChoreography 排期：40 张牌的最后一张也留足 320ms 翻回", async () => {
   const out = await tsBehaviorTest("src/choreography.ts", `
+    const _mm = window.matchMedia.bind(window);
+    window.matchMedia = (q) => q.includes('prefers-reduced-motion')
+      ? { matches: false, media: q, addEventListener(){}, removeEventListener(){}, addListener(){}, removeListener(){}, onchange: null, dispatchEvent(){ return false; } }
+      : _mm(q);
     const cards = Array.from({ length: 40 }, () => document.createElement('div'));
     const started = performance.now();
     let lastAdd = -1;
@@ -661,11 +669,21 @@ test("ExitChoreography 排期：40 张牌的最后一张也留足 320ms 翻回",
     }
     const c = new ExitChoreography(cards);
     c.play(() => {});
-    return new Promise((resolve) => setTimeout(() => resolve({ lastAdd }), 1000));
+    const lastOffset = (cards.length - 1) * c.perCard;
+    return new Promise((resolve) => {
+      const deadline = performance.now() + 2000;
+      const poll = () => {
+        if (lastAdd >= 0 || performance.now() > deadline) {
+          return resolve({ lastAdd, lastOffset });
+        }
+        setTimeout(poll, 20);
+      };
+      poll();
+    });
   `);
   assert.ok(out.lastAdd >= 0, "最后一张确实被加上 revealing");
-  // 旧公式 1000/40 会让最后一张 975ms 才起演；新排期约 680ms。
-  assert.ok(out.lastAdd < 800, `最后一张起演 ${out.lastAdd.toFixed(0)}ms，需留足 320ms 翻回`);
+  // 旧公式 1000/40 会让最后一张 975ms 才起演；新排期按 (1000-320)/39≈17.44ms，末张约 680ms。
+  assert.ok(out.lastOffset < 800, `最后一张排期 ${out.lastOffset.toFixed(0)}ms，需留足 320ms 翻回`);
 });
 
 test("动画期间 Esc 可取消（onKeyDown 不在 pending 时直接 return）", () => {
