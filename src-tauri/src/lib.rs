@@ -14,7 +14,8 @@ use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder
 use error::{AppError, AppResult};
 use game::Round;
 use model::{
-    DragHover, EnvReport, IconWrite, MonitorInfo, OverlayView, PublicState, RoundResult, Snapshot,
+    DragHover, EnvReport, IconWrite, LayoutBackup, MonitorInfo, OverlayView, PublicState,
+    RoundResult, Snapshot,
     StartResponse,
 };
 
@@ -227,6 +228,25 @@ fn restore_desktop_icons(app: &AppHandle) {
         let _ = platform::set_icons_visible(true);
     }
     set_icon_marker(app, false);
+}
+
+/// 写回前把原布局备份到 app_config_dir/original-layout.json，供人工恢复。
+/// 备份写失败 → 中止保存，桌面一个字节都不动。
+fn write_layout_backup(app: &AppHandle, original: &[IconWrite]) -> AppResult<()> {
+    let dir = app
+        .path()
+        .app_config_dir()
+        .map_err(|err| AppError::with_detail("backup_failed", err.to_string()))?;
+    let backup = LayoutBackup::from_positions(env!("CARGO_PKG_VERSION"), original);
+    let json = serde_json::to_string_pretty(&backup)
+        .map_err(|err| AppError::with_detail("backup_failed", err.to_string()))?;
+    std::fs::create_dir_all(&dir)
+        .map_err(|err| AppError::with_detail("backup_failed", err.to_string()))?;
+    let path = dir.join("original-layout.json");
+    std::fs::write(&path, json)
+        .map_err(|err| AppError::with_detail("backup_failed", err.to_string()))?;
+    eprintln!("save: layout backup written to {}", path.display());
+    Ok(())
 }
 
 /// 仅调试：在普通窗口里跑完整流程，避免全屏应用/游戏抢占桌面。
@@ -581,6 +601,8 @@ async fn save_and_exit(app: AppHandle, state: State<'_, AppState>) -> AppResult<
         app.exit(0);
         return Ok(());
     }
+    // 写回前备份原布局：备份写失败就不写桌面（没有后悔药就不动用户的桌面）。
+    write_layout_backup(&app, &original)?;
     // 写回前先让真实图标回到桌面：apply_positions 需要图标可见，
     // 视觉上也更自然（图标当场移动到最终位置）。
     restore_desktop_icons(&app);

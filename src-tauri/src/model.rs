@@ -230,3 +230,74 @@ pub struct StartResponse {
     pub total: usize,
     pub overlays: usize,
 }
+
+/// 布局备份：保存新布局写回前写入 app_config_dir/original-layout.json，供人工恢复。
+/// 前身在 e6d250f 被有意移除（write-only 虚假安全感）；本轮按"人工恢复文件"重建：
+/// S4 故障注入实测强杀后凭备份人工恢复，不再只写不读。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LayoutBackup {
+    app_version: String,
+    saved_at_unix: u64,
+    icons: Vec<LayoutBackupIcon>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LayoutBackupIcon {
+    pub name: String,
+    pub x: i32,
+    pub y: i32,
+}
+
+impl LayoutBackup {
+    pub fn from_positions(app_version: &str, original: &[IconWrite]) -> Self {
+        Self {
+            app_version: app_version.into(),
+            saved_at_unix: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0),
+            icons: original
+                .iter()
+                .map(|p| LayoutBackupIcon {
+                    name: p.name.clone(),
+                    x: p.x,
+                    y: p.y,
+                })
+                .collect(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn layout_backup_round_trip() {
+        let original = vec![
+            IconWrite { name: "微信".into(), x: 96, y: 48 },
+            IconWrite { name: "README.lnk".into(), x: -1920, y: 0 },
+        ];
+        let backup = LayoutBackup::from_positions("0.1.1", &original);
+        let json = serde_json::to_string(&backup).expect("serialize");
+        assert!(json.contains("\"appVersion\""), "camelCase 键名必须稳定: {json}");
+        assert!(json.contains("\"savedAtUnix\""), "camelCase 键名必须稳定: {json}");
+        let parsed: LayoutBackup = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(parsed, backup);
+        assert_eq!(parsed.icons.len(), 2);
+        assert_eq!(parsed.icons[0].name, "微信");
+        assert_eq!(parsed.icons[1].x, -1920);
+        assert_eq!(backup.app_version, "0.1.1");
+    }
+
+    #[test]
+    fn layout_backup_empty_icons_is_valid() {
+        let backup = LayoutBackup::from_positions("0.1.1", &[]);
+        assert!(backup.icons.is_empty());
+        let json = serde_json::to_string(&backup).expect("serialize");
+        let parsed: LayoutBackup = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(parsed, backup);
+    }
+}
