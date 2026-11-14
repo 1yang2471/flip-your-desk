@@ -26,10 +26,18 @@
 - 非 Windows 分支：本机用「临时改 rustup manifest 的 `xz_url` 走官方源装 Linux target（装完还原，checksum 一致）+ 临时 pkg-config shim 骗过 build script」跑通 `cargo check --target x86_64-unknown-linux-gnu`，`EXIT=0`。环境变量/shim 均为本机一次性验证手段，**未进仓库、未进 CI**。剩余 9 个 warning 均为 `icon_cutout.rs`/`geometry.rs` 里原本就存在的 Windows-only 代码在非 Windows 下未引用，非本次引入，不主动清理。
 - tauri 源码核对：`WebviewWindow::hwnd()` 确为 `#[cfg(windows)]`（macOS `ns_window()`、Linux `gtk_window()`），坐实 `lib.rs:173` 是跨平台编译缺陷。
 
-## 未验证项（不宣称已绿）
+## 验证结果（2026-11-14 push 后实测）
 
-- **`linux-check` job 未在真实 ubuntu-latest 上跑过**：本机是 Windows，无法复现 GitHub runner 的 apt 依赖组合。job 按官方 prerequisites [S30] 写，但首次 push 后需看 `gh run list` / CI 日志确认绿；若 `webkit2gtk-4.1`/`gtk+-3.0`/`libsoup-3.0` 的 `.pc` 有缺，按报错补 apt 包。
+- 推送 `6e31367` 后 CI run **`43579946170` 全绿**：
+  - `check`（windows-latest）5m19s ✓：fmt / test(38 passed) / clippy / 前端全过
+  - `linux-check`（ubuntu-latest，实际镜像 Ubuntu 26.04.1）1m30s ✓：官方 apt 依赖安装成功，`cargo check --manifest-path src-tauri/Cargo.toml` 步骤日志 `Finished \`dev\` profile ... in 46.24s`，无 `error[E`/`error:`，生成 9 个 warning（均为 `model.rs`/`icon_cutout.rs`/`geometry.rs` 里原本就存在的 Windows-only 代码在非 Windows 下未引用，与本机交叉 check 一致）
+  - 两条 annotation 为无害提示：`actions/checkout@v4` 的 Node.js 20 弃用警告、ubuntu-latest 将迁至 Ubuntu 26 的说明，均非失败
+- 结论：初稿担心的 apt 依赖组合在真实 runner 上够用，「非 Windows 分支持续过编译」这条门已真实验证，不再是未验证项。
+
+## 仍未做（范围外）
+
 - 本次未做：macOS/Linux 任何平台实现、trait、句柄参数下沉、真机写回验证（Phase 1/2 范围）。
+- 注意 CI 的 Linux runner **只能验证「能编译」**：它没有真实桌面、没有桌面图标、不能弹 Finder 授权框，验证不了「跑对」。Phase 1/2 的行为验收仍需真机。
 
 ## 来源
 
