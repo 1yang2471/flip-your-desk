@@ -10,7 +10,7 @@ const dictionaries: Record<Lang, Record<string, string>> = {
 };
 
 const STORAGE_KEY = "fyd.lang";
-export const APP_VERSION = "0.1.0";
+export const APP_VERSION = "0.1.1";
 
 export function isLang(value: string | null | undefined): value is Lang {
   return value === "zh-CN" || value === "en-US";
