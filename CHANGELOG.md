@@ -6,7 +6,7 @@ All notable changes to this project are documented here.
 
 - **Desktop presence layer (purely visual, no backend changes).**
   - Idle breathing: after 8 seconds without input the card backs give a single 1px bob
-  - Exit ritual: quitting (Esc confirm) or restoring the original layout plays a card-by-card domino and only runs the real command once it finishes; the animation is cancellable via Esc or the visible "keep playing" button
+  - Exit ritual: quitting from the confirmation dialog or restoring the original layout plays a card-by-card domino and only runs the real command once it finishes; the animation is cancellable via Esc or the visible "keep playing" button
   - Saving a new layout keeps the same "animate, then run the real command" ordering (the fake icon slide was dropped: it had no effect under the real CSS)
 - Removed the focus-away doze after manual testing. Overlay windows are deliberately non-focusable (so clicking a card cannot raise them above normal windows), which made "come back and it restores" unreliable: the cards flipped back and needed a click to return. Breathing and the exit ritual are unaffected.
 - Fixed breathing/domino animations losing to the inline deal-in animation

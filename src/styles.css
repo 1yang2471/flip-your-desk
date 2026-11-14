@@ -654,8 +654,8 @@ button {
 }
 
 /* 卡片只用鼠标操作。focus 仅用于让 focusable(false) 的覆盖窗收到 keydown
-   （选中卡后按 Esc 取消），不画焦点环：它会和 .is-selected 的金框叠成两圈，
-   取消选中后还会残留一圈。HUD/弹窗按钮的焦点环不受影响。 */
+   （Esc 打开/关闭退出确认、取消退出演出），不画焦点环：它会和 .is-selected
+   的金框叠成两圈，取消选中后还会残留一圈。HUD/弹窗按钮的焦点环不受影响。 */
 .card:focus-visible {
   outline: none;
 }
