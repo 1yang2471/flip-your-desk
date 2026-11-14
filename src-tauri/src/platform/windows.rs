@@ -1057,6 +1057,24 @@ pub fn pin_window_over_desktop(hwnd: isize) -> AppResult<()> {
     .map_err(|err| AppError::with_detail("pin_over_desktop", err.to_string()))
 }
 
+/// 把 0..total 切成 ≤parts 个连续区间（并行分片用）；total=0 返回空。
+fn capture_chunk_ranges(total: usize, parts: usize) -> Vec<std::ops::Range<usize>> {
+    if total == 0 {
+        return Vec::new();
+    }
+    let parts = parts.max(1).min(total);
+    let base = total / parts;
+    let rem = total % parts;
+    (0..parts)
+        .scan(0usize, |start, i| {
+            let len = base + usize::from(i < rem);
+            let range = *start..(*start + len);
+            *start += len;
+            Some(range)
+        })
+        .collect()
+}
+
 pub fn capture(monitors: &[MonitorInfo]) -> AppResult<Captured> {
     let desktop = Desktop::open()?;
     if !desktop.icons_visible() {
@@ -1510,5 +1528,24 @@ mod tests {
         }
         std::fs::write(dir.join("metrics.txt"), metrics).expect("write metrics");
         eprintln!("dump written to {}", dir.display());
+    }
+}
+
+#[cfg(test)]
+mod consolidation_tests {
+    use super::*;
+
+    #[test]
+    fn chunk_ranges_covers_all_contiguously() {
+        assert!(capture_chunk_ranges(0, 4).is_empty());
+        assert_eq!(capture_chunk_ranges(1, 4), vec![0..1]);
+        assert_eq!(capture_chunk_ranges(7, 3), vec![0..3, 3..5, 5..7]);
+        for &(total, parts) in &[(13usize, 4usize), (1, 8), (100, 8)] {
+            let ranges = capture_chunk_ranges(total, parts);
+            assert_eq!(ranges.iter().map(|r| r.len()).sum::<usize>(), total);
+            assert_eq!(ranges.first().unwrap().start, 0);
+            assert_eq!(ranges.last().unwrap().end, total);
+            assert!(ranges.windows(2).all(|w| w[0].end == w[1].start));
+        }
     }
 }
