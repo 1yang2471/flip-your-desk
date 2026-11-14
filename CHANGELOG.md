@@ -2,6 +2,16 @@
 
 All notable changes to this project are documented here.
 
+## 0.3.0
+
+- **Desktop presence layer (purely visual, no backend changes).**
+  - Focus-away doze: switch away from the window and every flipped-open face turns back down while the HUD collapses to a small gold dot; returning restores them exactly, with no change to game state or progress
+  - Idle breathing: after 8 seconds without input the card backs give a single 1px bob
+  - Exit ritual: quitting (Esc confirm) or restoring the original layout plays a card-by-card domino and only runs the real command once it finishes; the animation is cancellable via Esc or the visible "keep playing" button
+  - Saving a new layout keeps the same "animate, then run the real command" ordering (the fake icon slide was dropped: it had no effect under the real CSS)
+- Fixed the desktop-presence CSS so the veil/breathing/domino rules actually beat the inline deal-in animation (the first cut silently did nothing on the real DOM)
+- Frontend regression tests now assert real computed styles and real module behavior instead of source-string matches; `npm test` builds first, and CI/release run it
+
 ## 0.2.0
 
 - **Timed challenge mode**: pick it from the launcher; the limit scales with icon count (30s + 5s per icon), the HUD counts down and turns gold in the last 20%, and the round settles automatically when time runs out (marked "out of time")
