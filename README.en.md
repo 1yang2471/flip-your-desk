@@ -56,7 +56,7 @@ Fully offline: no network calls, no telemetry, no writes outside its own app dat
 - Icon positions and labels are read from Explorer's desktop ListView (`LVM_GETITEMPOSITION` / `LVM_GETITEMTEXTW`); positions are written back with `LVM_SETITEMPOSITION32`
 - Card faces are cropped from the real desktop pixels (`PrintWindow` on the desktop view; the icons are hidden briefly to capture a clean wallpaper, then restored), so thumbnails and shortcut arrows stay authentic
 - Every card back switches between light and dark based on the wallpaper brightness behind it
-- Before writing, the app checks that the desktop has not changed (count, names, coordinates) and refuses to write if it has; after writing it reads the positions back and rolls back from the backup if anything is off
+- Writes are matched by icon name (icons added, renamed or moved mid-round never get mixed up); after writing, every position is read back and double-checked, and failures roll back to the in-memory original layout. Before saving, the original layout is written to `original-layout.json` for manual recovery
 
 ## Build from source
 
