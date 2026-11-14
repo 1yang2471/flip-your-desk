@@ -135,8 +135,13 @@ function renderLauncher(
   const { lang, env } = state;
   clear(root);
   root.classList.add("launcher-root");
+  // 首次渲染才播入场淡入；之后每次 render（切语言/重探测）复用同一 shell 结构，
+  // 重播 120ms 淡入会表现为「整窗闪一下透明」。
+  const firstRender = root.dataset.rendered !== "1";
+  root.dataset.rendered = "1";
 
   const shell = h("div", "launcher-shell");
+  if (!firstRender) shell.style.animation = "none";
 
   // Header ---------------------------------------------------------------
   const head = h("header", "launcher-head");

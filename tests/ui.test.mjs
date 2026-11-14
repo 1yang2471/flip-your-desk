@@ -734,6 +734,23 @@ test("启动窗 header：语言按钮与 tagline 不换行、按钮组不收缩"
   assert.equal(out.actionsShrink, "0", "按钮组不被压缩");
 });
 
+test("选中卡只有一圈金边：selectIcon 不做 programmatic focus", () => {
+  const f = readFileSync(join(ROOT, "src/overlay.ts"), "utf8");
+  const block = f.slice(f.indexOf("private selectIcon("), f.indexOf("private clearSelection("));
+  assert.ok(block.includes('classList.add("is-selected")'), "选中仍加 is-selected 金边");
+  assert.ok(!/\.focus\(/.test(block), "不再 programmatic focus（否则叠出 :focus-visible 第二圈）");
+  const css = readFileSync(join(ROOT, "src/styles.css"), "utf8");
+  assert.match(css, /\.card\.is-selected\s*\{[^}]*outline:/, "is-selected 自身有金边");
+});
+
+test("启动窗重渲染不重播入场淡入（切语言不闪透明）", () => {
+  const f = readFileSync(join(ROOT, "src/launcher.ts"), "utf8");
+  assert.match(f, /dataset\.rendered/, "记录了是否已渲染");
+  assert.match(f, /if \(!firstRender\) shell\.style\.animation = "none"/, "二次渲染关掉入场动画");
+  const css = readFileSync(join(ROOT, "src/styles.css"), "utf8");
+  assert.match(css, /\.launcher-shell\s*\{[^}]*animation: launcher-in/, "入场动画仍只在首次渲染生效");
+});
+
 let failed = 0;
 try {
   await start();

@@ -858,7 +858,8 @@ export class OverlayGame {
     const element = this.faces.get(iconId);
     if (element) {
       element.classList.add("is-selected");
-      element.focus({ preventScroll: true });
+      // 不做 programmatic focus：这会让卡片吃到 :focus-visible 金边，
+      // 与 .is-selected 的金边叠成两圈（纯鼠标操作，不需要键盘焦点环）。
     }
     this.hudHint.hidden = false;
     this.hudHint.textContent = t(this.lang, "overlay.selected");
@@ -868,7 +869,11 @@ export class OverlayGame {
   private clearSelection(): void {
     if (this.selectedIcon !== null) {
       const element = this.faces.get(this.selectedIcon);
-      element?.classList.remove("is-selected");
+      if (element) {
+        element.classList.remove("is-selected");
+        // 兜底：若该卡仍持有 DOM 焦点，松掉，避免残留一层焦点金边。
+        if (document.activeElement === element) element.blur();
+      }
     }
     this.selectedIcon = null;
     this.selectedSlot = null;
