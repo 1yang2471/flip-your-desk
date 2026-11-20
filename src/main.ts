@@ -38,7 +38,14 @@ async function main(): Promise<void> {
     return;
   }
 
-  await initLauncher(root);
+  try {
+    await initLauncher(root);
+  } catch (error) {
+    const payload = asAppError(error);
+    console.error("launcher init failed", payload);
+    renderFatal(root, errorText(lang, payload.code), lang);
+    return;
+  }
   try {
     await getCurrentWindow().setTitle(t(lang, "app.windowTitle"));
   } catch {

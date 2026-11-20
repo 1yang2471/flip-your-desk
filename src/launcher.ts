@@ -1,7 +1,8 @@
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 import { api, asAppError } from "./api";
-import { storedMuted } from "./audio";
+import { storeMuted, storedMuted } from "./audio";
 import { clear, h, iconEl } from "./dom";
 import {
   APP_VERSION,
@@ -53,15 +54,29 @@ export async function initLauncher(root: HTMLElement): Promise<void> {
       const next: Lang = state.lang === "zh-CN" ? "en-US" : "zh-CN";
       state.lang = next;
       storeLang(next);
+      const title = t(next, "app.windowTitle");
+      document.title = title;
+      try {
+        void getCurrentWindow()
+          .setTitle(title)
+          .catch(() => {
+            // 窗口 API 不可用时页面标题已更新。
+          });
+      } catch {
+        // 纯浏览器预览没有窗口 API。
+      }
       render();
     },
     toggleMute: () => {
       state.muted = !state.muted;
+      // 立即落盘：用户可能切完静音直接关启动窗，不经过覆盖层。
+      storeMuted(state.muted);
       void api
         .setMuted(state.muted)
         .catch((error) => {
           console.error("mute failed", asAppError(error));
           state.muted = !state.muted;
+          storeMuted(state.muted);
         })
         .finally(render);
       render();
@@ -92,6 +107,8 @@ export async function initLauncher(root: HTMLElement): Promise<void> {
       const payload = asAppError(error);
       console.error("probe failed", payload);
       state.error = errorText(state.lang, payload.code);
+      // 上一次探测的就绪结果不能继续当作可用：否则错误提示旁边仍能点开始。
+      state.env = null;
     }
     state.probing = false;
     render();
@@ -99,6 +116,7 @@ export async function initLauncher(root: HTMLElement): Promise<void> {
 
   const start = async (mode: "real" | "mock", timed = false) => {
     state.starting = true;
+    state.dealing = null;
     state.error = null;
     render();
     try {
@@ -120,11 +138,11 @@ export async function initLauncher(root: HTMLElement): Promise<void> {
     state.starting = false;
     state.error = errorText(state.lang, event.payload.code);
     render();
-  });
+  }).catch((error: unknown) => console.error("start-failed listener failed", error));
   await listen<CaptureProgress>("capture-progress", (event) => {
     state.dealing = event.payload;
     render();
-  });
+  }).catch((error: unknown) => console.error("capture listener failed", error));
 }
 
 function renderLauncher(
@@ -206,7 +224,8 @@ function renderLauncher(
   const panel = h("section", "status-panel");
   const panelHead = h("div", "panel-head");
   panelHead.appendChild(h("span", "panel-title", t(lang, "launcher.env")));
-  const ready = !!env && env.issues.length === 0;
+  // 探测自身失败时 icon_count/auto_arrange 都不可信，不能显示“就绪”或放行开始。
+  const ready = !!env && env.issues.length === 0 && !env.probeError;
   const checking = state.probing && !env;
   const statusPill = h(
     "span",
@@ -347,7 +366,8 @@ function renderLauncher(
   // Actions --------------------------------------------------------------
   const startButton = h("button", "primary-button");
   startButton.type = "button";
-  const blocked = !env || env.issues.length > 0 || state.probing;
+  const blocked =
+    !env || env.issues.length > 0 || state.probing || !!env.probeError;
   startButton.disabled = blocked || state.starting;
   if (state.starting) {
     const spinner = h("span", "spinner");
@@ -380,7 +400,7 @@ function renderLauncher(
   timedButton.addEventListener("click", () => actions.start("real", true));
   body.appendChild(timedButton);
 
-  if (blocked && env && env.issues.length > 0) {
+  if (blocked && env && (env.issues.length > 0 || env.probeError)) {
     body.appendChild(h("p", "start-hint", t(lang, "launcher.startDisabled")));
   }
 

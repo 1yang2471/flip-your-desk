@@ -39,7 +39,7 @@ jobs:
         run: cargo test --manifest-path src-tauri/Cargo.toml
 
       - name: Lint backend
-        run: cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 
   # 非 Windows 分支（platform/unsupported.rs 与 lib.rs 的 cfg）持续过编译。
   # 在 Linux runner 上跑 host check：tauri 的 Linux 原生依赖（dbus/gtk/webkit）

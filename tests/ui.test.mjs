@@ -39,6 +39,13 @@ function scene() {
   </span>
 </button>
 </div></div>
+<div class="modal" id="modalProbe" style="width:340px">
+  <p class="modal-timed-out" id="timedOut">Out of time</p>
+  <div class="modal-actions">
+    <button class="secondary-button" type="button">Save</button>
+    <button class="text-button" id="textAction" type="button">Copy</button>
+  </div>
+</div>
 <div id="launcherProbe" style="width:540px">
 <header class="launcher-head">
   <div class="brand"><span class="brand-mark"><span class="brand-mark-glyph">?</span></span>
@@ -237,7 +244,11 @@ test("音效：主增益 + 限幅 + 静音立即打断已排期的音", () => {
   assert.match(source, /DynamicsCompressor/, "需要限幅器防止多音叠加削顶");
   assert.match(source, /master/, "需要主增益节点统一控制音量");
   assert.match(source, /localStorage/, "静音偏好必须持久化");
-  assert.match(source, /setMuted[\s\S]{0,300}linearRamp|setMuted[\s\S]{0,300}setValueAtTime/, "静音要立刻把主增益降到 0");
+  assert.match(
+    methodBody(source, "setMuted"),
+    /linearRamp|setValueAtTime/,
+    "静音要立刻把主增益降到 0",
+  );
 });
 
 test("翻牌音与画面同帧：不能在 drawCard 的 .then() 里晚于 state-changed", () => {
@@ -701,7 +712,8 @@ test("Esc 不再取消选卡：提示与逻辑都只给鼠标路径", () => {
   const f = readFileSync(join(ROOT, "src/overlay.ts"), "utf8");
   const block = f.slice(f.indexOf("private onKeyDown("), f.indexOf("private trapFocus("));
   assert.ok(!/clearSelection\(\)/.test(block), "Esc 分支不再清选中");
-  assert.match(block, /this\.selectedIcon === null/, "无选中时 Esc 仍可开退出确认");
+  assert.match(block, /this\.showExitConfirm\(\)/, "有选中卡时 Esc 仍可开退出确认");
+  assert.doesNotMatch(block, /this\.selectedIcon === null/, "选中卡不再挡住退出确认");
   const zh = readFileSync(join(ROOT, "src/locales/zh-CN.ts"), "utf8");
   const en = readFileSync(join(ROOT, "src/locales/en-US.ts"), "utf8");
   assert.ok(!/overlay\.selected"[^\n]*Esc/.test(zh), "中文提示不再承诺 Esc 取消");
@@ -800,6 +812,202 @@ test("启动窗重渲染不重播入场淡入（切语言不闪透明）", () =>
   assert.match(f, /if \(!firstRender\) shell\.style\.animation = "none"/, "二次渲染关掉入场动画");
   const css = readFileSync(join(ROOT, "src/styles.css"), "utf8");
   assert.match(css, /\.launcher-shell\s*\{[^}]*animation: launcher-in/, "入场动画仍只在首次渲染生效");
+});
+
+// ---------------------------------------------------------- 审查修复回归
+
+test("TimedClock：到期只触发一次，重开用新 startedAtMs 重新计时", async () => {
+  const out = await tsBehaviorTest("src/timed.ts", `
+    const c = new TimedClock();
+    const start = c.tick(10000, 0, false, 1000);
+    const end = c.tick(10000, 0, false, 11000);
+    const again = c.tick(10000, 0, false, 11001);
+    const replay = c.tick(10000, 20000, false, 20000);
+    const synced = c.tick(10000, 30000, false, 31000);
+    const finished = c.tick(10000, 30000, true, 32000);
+    return {
+      start: start.leftMs,
+      expired: end.expired,
+      expiredAgain: again.expired,
+      replay: replay.leftMs,
+      synced: synced.leftMs,
+      finished: finished.leftMs,
+    };
+  `);
+  assert.equal(out.start, 10000, "首帧显示完整时限");
+  assert.equal(out.expired, true, "到点只触发一次");
+  assert.equal(out.expiredAgain, false, "同一局不会重复结算");
+  assert.equal(out.replay, 10000, "重开换 startedAtMs 后重新满时限");
+  assert.equal(out.synced, 9000, "优先用后端共享起点");
+  assert.equal(out.finished, 0, "结算后倒计时归零");
+});
+
+test("限时 HUD 使用共享 startedAtMs，不再依赖每窗本地起点", () => {
+  const f = readFileSync(join(ROOT, "src/overlay.ts"), "utf8");
+  assert.match(f, /new TimedClock\(\)/, "overlay 使用可测试的 TimedClock");
+  const clock = methodBody(f, "private updateClock");
+  assert.match(clock, /state\.startedAtMs/, "倒计时锚点来自后端");
+  assert.doesNotMatch(f, /timedStartedAt/, "移除每窗本地起点");
+  assert.doesNotMatch(f, /timingOut/, "移除永不复位的 timingOut");
+});
+
+test("拖拽回原位/空白松手后仍抑制随后的 click", () => {
+  const f = readFileSync(join(ROOT, "src/overlay.ts"), "utf8");
+  const finish = f.slice(f.indexOf("private finishDrag"), f.indexOf("private globalPoint"));
+  assert.match(finish, /this\.suppressClick = true/, "armed 拖拽结束必须抑制 click");
+  const afterTarget = finish.slice(finish.indexOf("const target ="));
+  assert.doesNotMatch(
+    afterTarget,
+    /suppressClick = false/,
+    "不能在 pointerup 内提前清抑制，否则回原位松手会误选中/交换",
+  );
+});
+
+test("unbindDragListeners 用 cancel 解绑 pointercancel", () => {
+  const f = readFileSync(join(ROOT, "src/overlay.ts"), "utf8");
+  const block = f.slice(
+    f.indexOf("private unbindDragListeners"),
+    f.indexOf("private onPointerMove"),
+  );
+  assert.match(
+    block,
+    /removeEventListener\("pointercancel", listeners\.cancel/,
+    "解绑必须与绑定的 cancel 处理器配对",
+  );
+});
+
+test("结算时收起选中金框", () => {
+  const f = readFileSync(join(ROOT, "src/overlay.ts"), "utf8");
+  const apply = f.slice(f.indexOf("private applyState"), f.indexOf("private updateHud"));
+  assert.match(apply, /if \(state\.finished\) this\.clearSelection\(\)/);
+});
+
+test("取消选中后重新摆放 HUD（提示条不再把胶囊留在半空）", () => {
+  const f = readFileSync(join(ROOT, "src/overlay.ts"), "utf8");
+  const clear = f.slice(f.indexOf("private clearSelection"), f.indexOf("private commitSelection"));
+  assert.match(clear, /this\.placeFloating\(\)/);
+});
+
+test("拖拽命中排除 HUD/确认按钮", () => {
+  const f = readFileSync(join(ROOT, "src/overlay.ts"), "utf8");
+  const hit = f.slice(f.indexOf("private hitTest"), f.indexOf("private applyHover"));
+  assert.match(hit, /hudWrap\.getBoundingClientRect\(\)/);
+  assert.match(hit, /return null/);
+});
+
+test("i18n 替换用函数，图标名含 $& 不会被当成替换模式", () => {
+  const f = readFileSync(join(ROOT, "src/i18n.ts"), "utf8");
+  assert.match(f, /replaceAll\(`\{\$\{name\}\}`,\s*\(\)\s*=>/, "必须使用函数替换");
+});
+
+test("字号下限 12px（DESIGN 硬约束）", () => {
+  const sizes = [...cssText.matchAll(/font-size:\s*(\d+(?:\.\d+)?)px/g)].map((m) =>
+    Number(m[1]));
+  const small = sizes.filter((size) => size < 12);
+  assert.deepEqual(small, [], `仍有 ${small.length} 处小于 12px 的字号`);
+});
+
+test("步骤号使用亮金，避免 accent-deep 在深底上低于 4.5:1", () => {
+  const block = cssBlock(cssText, ".howto-index");
+  assert.match(block, /color:var\(--accent\)/);
+});
+
+test("44px 热区之间留出足够间距，不互相抢占", () => {
+  const head = cssBlock(cssText, ".head-actions");
+  assert.match(head, /gap:(1[6-9]|[2-9]\d)px/, "30px 按钮的间距至少 16px");
+  assert.match(
+    cssText,
+    /\.hud-button\+\.hud-button\{[^}]*margin-left:(1[4-9]|[2-9]\d)px/,
+    "24px 按钮中心距至少 44px",
+  );
+});
+
+test("卡片常驻 will-change 只留给拖拽中的单卡", () => {
+  const card = cssBlock(cssText, ".card{");
+  assert.doesNotMatch(card, /will-change/, "整副牌不应常驻合成层");
+  const dragging = cssBlock(cssText, ".card.is-dragging");
+  assert.match(dragging, /will-change:transform/);
+});
+
+test("卡片键盘焦点有可见替代环，选中态不叠第二圈", () => {
+  assert.match(
+    cssText,
+    /\.card:focus-visible:not\(\.is-selected\) \.card-inner\{[^}]*outline:2px solid var\(--accent\)/,
+  );
+});
+
+test("结算文字动作/超时标记居中，toast 在模态之上", async () => {
+  const out = await fresh(`(() => {
+    const text = document.getElementById('textAction');
+    const timed = document.getElementById('timedOut');
+    return {
+      justify: getComputedStyle(text).justifySelf,
+      align: getComputedStyle(timed).textAlign,
+    };
+  })()`);
+  assert.equal(out.justify, "center", "文字动作居中");
+  assert.equal(out.align, "center", "超时标记居中");
+  const toast = cssBlock(cssText, ".toast{");
+  assert.match(toast, /z-index:100/, "toast 必须高于 modal-layer 的 90");
+});
+
+test("模态有 aria-labelledby，焦点可被读屏命名", () => {
+  const f = readFileSync(join(ROOT, "src/overlay.ts"), "utf8");
+  const show = f.slice(f.indexOf("private showResult"), f.indexOf("private copyText"));
+  assert.match(show, /aria-labelledby/);
+  const exit = f.slice(f.indexOf("private showExitConfirm"), f.indexOf("private hideExitConfirm"));
+  assert.match(exit, /aria-labelledby/);
+});
+
+test("启动窗切静音立即持久化", () => {
+  const launcher = readFileSync(join(ROOT, "src/launcher.ts"), "utf8");
+  const audio = readFileSync(join(ROOT, "src/audio.ts"), "utf8");
+  assert.match(audio, /export function storeMuted/);
+  assert.match(launcher, /storeMuted\(state\.muted\)/);
+});
+
+test("启动窗探测失败时不再显示就绪/放行开始", () => {
+  const f = readFileSync(join(ROOT, "src/launcher.ts"), "utf8");
+  assert.match(f, /env\.issues\.length === 0 && !env\.probeError/);
+  assert.match(f, /!!env\.probeError/);
+  assert.match(f, /state\.env = null/);
+});
+
+test("版本号六处一致（package/tauri/Cargo/i18n/两份 README）", () => {
+  const pkg = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8")).version;
+  const tauri = JSON.parse(
+    readFileSync(join(ROOT, "src-tauri/tauri.conf.json"), "utf8"),
+  ).version;
+  const cargo = readFileSync(join(ROOT, "src-tauri/Cargo.toml"), "utf8")
+    .match(/^version\s*=\s*"([^"]+)"/m)?.[1];
+  const i18n = readFileSync(join(ROOT, "src/i18n.ts"), "utf8")
+    .match(/APP_VERSION\s*=\s*"([^"]+)"/)?.[1];
+  const readme = readFileSync(join(ROOT, "README.md"), "utf8");
+  const readmeEn = readFileSync(join(ROOT, "README.en.md"), "utf8");
+  assert.equal(tauri, pkg, "tauri.conf.json 版本");
+  assert.equal(cargo, pkg, "Cargo.toml 版本");
+  assert.equal(i18n, pkg, "APP_VERSION 版本");
+  assert.ok(readme.includes(`Desk_${pkg}_x64`), "README 安装包名");
+  assert.ok(readmeEn.includes(`Desk_${pkg}_x64`), "README.en 安装包名");
+});
+
+test("每个启动器问题码都有双语标题与提示", () => {
+  const rust =
+    readFileSync(join(ROOT, "src-tauri/src/lib.rs"), "utf8") +
+    readFileSync(join(ROOT, "src-tauri/src/platform/windows.rs"), "utf8");
+  const codes = new Set(
+    [...rust.matchAll(/issues\.push\("([a-z_]+)"(?:\.to_string\(\))?\)/g)].map((m) => m[1]),
+  );
+  const zh = readFileSync(join(ROOT, "src/locales/zh-CN.ts"), "utf8");
+  const en = readFileSync(join(ROOT, "src/locales/en-US.ts"), "utf8");
+  const missing = [...codes].filter(
+    (code) =>
+      !zh.includes(`"issue.${code}.title"`) ||
+      !zh.includes(`"issue.${code}.hint"`) ||
+      !en.includes(`"issue.${code}.title"`) ||
+      !en.includes(`"issue.${code}.hint"`),
+  );
+  assert.deepEqual(missing, [], `缺少启动器问题文案: ${missing.join(", ")}`);
 });
 
 let failed = 0;

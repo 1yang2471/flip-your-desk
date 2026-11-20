@@ -175,7 +175,11 @@ impl Round {
         Ok(result)
     }
 
-    pub fn replay(&mut self) {
+    /// 只允许从结算态重开；局中调用会清空玩家进度，必须拒绝。
+    pub fn replay(&mut self) -> AppResult<()> {
+        if self.result.is_none() {
+            return Err(AppError::new("round_not_finished"));
+        }
         let mut pool: Vec<u32> = self.snapshot.icons.iter().map(|icon| icon.id).collect();
         pool.shuffle(&mut thread_rng());
         self.placements = vec![None; self.snapshot.icons.len()];
@@ -184,6 +188,7 @@ impl Round {
         self.result = None;
         self.started = Some(Instant::now());
         self.started_at_ms = now_ms();
+        Ok(())
     }
 
     pub fn public_state(&self) -> PublicState {
@@ -497,12 +502,22 @@ mod tests {
         round.placements = (0..round.total()).map(|i| Some(i as u32)).collect();
         round.pool.clear();
         round.finish().unwrap();
-        round.replay();
+        round.replay().unwrap();
         assert!(round.placements.iter().all(|slot| slot.is_none()));
         assert_eq!(round.pool.len(), round.total());
         assert_eq!(round.moves, 0);
         assert!(round.result.is_none());
         assert!(round.started_at_ms > 0);
+    }
+
+    #[test]
+    fn replay_before_finish_is_rejected() {
+        let mut round = test_round();
+        round.draw(0).unwrap();
+        assert_eq!(round.replay().unwrap_err().code, "round_not_finished");
+        // 进度未被清空。
+        assert_eq!(round.pool.len(), round.total() - 1);
+        assert!(round.placements[0].is_some());
     }
 
     #[test]

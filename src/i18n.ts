@@ -48,7 +48,8 @@ export function t(
     return key;
   }
   for (const [name, value] of Object.entries(vars)) {
-    template = template.replaceAll(`{${name}}`, String(value));
+    // 函数替换：图标名可能含 `$&`/`$'`，字符串替换会把它当成替换模式。
+    template = template.replaceAll(`{${name}}`, () => String(value));
   }
   return template;
 }

@@ -46,7 +46,7 @@ The app detects both states and tells you how to fix them; it never changes your
 
 ## Controls
 
-Mouse only: left-click a slot to draw a card, drag icons to swap positions. Esc opens or closes the exit confirmation dialog; click a selected card again to cancel it.
+Mouse only: left-click a slot to draw a card, drag icons to swap positions. Esc opens or closes the exit confirmation dialog (also while a card is selected; the selection is kept); click a selected card again to cancel it.
 
 ## Privacy
 

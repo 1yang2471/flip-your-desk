@@ -5,6 +5,7 @@ import { Sounds } from "./audio";
 import { ExitChoreography } from "./choreography";
 import { clear, h, iconEl } from "./dom";
 import { PresenceController } from "./presence";
+import { TimedClock } from "./timed";
 import {
   detectLang,
   errorText,
@@ -82,6 +83,7 @@ export class OverlayGame {
   private dealTimers: number[] = [];
   private presence: PresenceController | null = null;
   private choreography: ExitChoreography | null = null;
+  private readonly clock = new TimedClock();
   private readonly reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
 
   constructor(view: OverlayView, root: HTMLElement) {
@@ -164,7 +166,7 @@ export class OverlayGame {
 
     const mute = h("button", "hud-button");
     mute.type = "button";
-    mute.appendChild(iconEl(this.state.muted ? "mute" : "volume", 14));
+    mute.appendChild(iconEl(this.state.muted ? "mute" : "volume", 12));
     const syncMute = () => {
       clear(mute);
       mute.appendChild(iconEl(this.state.muted ? "mute" : "volume", 12));
@@ -266,17 +268,15 @@ export class OverlayGame {
   // --------------------------------------------------------------- events
 
   private clockTimer: number | null = null;
-  /** 超时自动结算只触发一次（心跳每秒跑，避免重复 invoke）。 */
-  private timingOut = false;
-  /** 限时倒计时的本地起点（ms）；0 = 尚未开始。 */
-  private timedStartedAt = 0;
   private unlisteners: Array<() => void> = [];
   private readonly onKeyDownBound = (event: KeyboardEvent) => this.onKeyDown(event);
 
   private bindEvents(): void {
     void listen<PublicState>("state-changed", (event) => {
       this.applyState(event.payload, false);
-    }).then((unlisten) => this.unlisteners.push(unlisten));
+    })
+      .then((unlisten) => this.unlisteners.push(unlisten))
+      .catch((error: unknown) => console.error("state listener failed", error));
     // drag-hover 由本窗口本地 applyHover 已足够；后端广播在多显示器下会与
     // 本地状态交错，这里不再订阅，避免 outline 闪烁。
     document.addEventListener("keydown", this.onKeyDownBound);
@@ -292,10 +292,10 @@ export class OverlayGame {
 
   private breathe(): void {
     if (this.reducedMotion.matches) return;
+    for (const back of this.backs.values()) back.classList.remove("breathing");
+    // 一次回流足够重播全部动画；逐卡 offsetWidth 会让 100+ 张牌同步重排。
+    void this.board.offsetWidth;
     for (const back of this.backs.values()) {
-      back.classList.remove("breathing");
-      // 强制回流，保证同一个元素连续两次空闲都能重播。
-      void back.offsetWidth;
       back.classList.add("breathing");
       back.addEventListener(
         "animationend",
@@ -338,6 +338,8 @@ export class OverlayGame {
     for (const unlisten of this.unlisteners) unlisten();
     this.unlisteners = [];
     document.removeEventListener("keydown", this.onKeyDownBound);
+    this.unbindDragListeners();
+    this.drag = null;
     this.presence?.dispose();
     this.presence = null;
     this.choreography?.cancel();
@@ -361,17 +363,17 @@ export class OverlayGame {
     }
     if (event.key === "Escape") {
       event.preventDefault();
+      // 退出确认优先于结算：超时结算恰好压在退出确认上时，Esc 仍能关掉它。
+      if (this.exitOpen) {
+        this.hideExitConfirm();
+        return;
+      }
       if (this.resultOpen) {
         // 结算弹窗必须由用户明确选择，Esc 不叠加退出确认。
         return;
       }
-      if (this.exitOpen) {
-        this.hideExitConfirm();
-      } else if (this.selectedIcon === null) {
-        this.showExitConfirm();
-      }
-      // 有选中卡时 Esc 不做任何事：取消选中改为再点一次该卡。
-      // （覆盖窗 focusable(false)，键盘路径本来就不可靠，不再让它承担选卡操作。）
+      // 选中卡不再挡住退出确认：Esc 只负责退出，取消选中仍靠再点一次该卡。
+      this.showExitConfirm();
       return;
     }
   }
@@ -395,10 +397,20 @@ export class OverlayGame {
 
   private applyState(state: PublicState, initial: boolean): void {
     if (state.finished) this.pending = false;
-    if (!state.finished && this.resultOpen) this.pending = false;
+    if (!state.finished && this.resultOpen) {
+      // 另一块屏先开了新局：本窗还在演的保存/恢复必须立刻取消，
+      // 否则 1s 后 then() 会把旧局命令打到新局上，静默失败。
+      if (this.pending && this.choreography) this.cancelExit();
+      else this.pending = false;
+    }
     const previousFinished = this.state.finished;
+    const previouslyPlaced = new Set(
+      this.state.placements.filter((id): id is number => id !== null && id !== undefined),
+    );
     this.state = state;
     this.sounds.setMuted(state.muted);
+    // 结算时收起还没落位的选中金框：弹窗后面留一圈空金边既误导也难看。
+    if (state.finished) this.clearSelection();
 
     const iconSlot = new Map<number, number>();
     state.placements.forEach((icon, slot) => {
@@ -410,11 +422,17 @@ export class OverlayGame {
     let newFace = false;
     for (const icon of this.view.icons) {
       const slotId = iconSlot.get(icon.id);
-      if (slotId === undefined || !this.slots.has(slotId)) {
+      if (slotId === undefined) {
         this.dropFace(icon.id);
         continue;
       }
-      if (!this.faces.has(icon.id)) newFace = true;
+      // 用前后 placements 判断“新抽出”，与本地窗口是否持有这张卡无关：
+      // 否则副屏抽牌时主屏 newFace=false，整副牌在副屏上全程无翻牌音。
+      if (!previouslyPlaced.has(icon.id)) newFace = true;
+      if (!this.slots.has(slotId)) {
+        this.dropFace(icon.id);
+        continue;
+      }
       this.ensureFace(icon, this.slots.get(slotId)!, slotId);
     }
     if (!initial && newFace && this.view.isPrimary) this.sounds.flip();
@@ -431,8 +449,10 @@ export class OverlayGame {
     if (this.selectedIcon !== null) {
       // 选中态跟随图标的新槽位：换位（自己被拖走/别卡换进来）后，
       // 旧 selectedSlot 已过期，再点第三张卡会用它发起错误交换。
+      // 图标被换到别的显示器时本屏已没有它的卡，必须清选中，否则下一次
+      // 点击会用远端槽位发起一次玩家看不到来源的交换。
       const current = iconSlot.get(this.selectedIcon);
-      if (current === undefined) {
+      if (current === undefined || !this.slots.has(current)) {
         this.clearSelection();
       } else if (current !== this.selectedSlot) {
         this.selectedSlot = current;
@@ -460,6 +480,11 @@ export class OverlayGame {
     const percent = total > 0 ? (revealed / total) * 100 : 0;
     this.hudProgressFill.style.transform = `scaleX(${percent / 100})`;
     this.hudMoves.textContent = String(this.state.moves);
+    this.hudMoves.title = tDynamic(
+      this.lang,
+      pluralKey("overlay.moves", this.state.moves),
+      { n: this.state.moves },
+    );
     this.updateClock();
     this.placeFloating();
   }
@@ -471,43 +496,49 @@ export class OverlayGame {
       : this.state.startedAtMs > 0
         ? Date.now() - this.state.startedAtMs
         : 0;
-    // 限时模式：倒计时 + 最后 20% 变色；到点自动结算（只触发一次）。
-    // 起点以本窗口首次看到 limitMs 的时刻为准：后端 startedAtMs 在发牌路径上
-    // 可能为 0（实测 canary 上倒计时会卡在满值），前端自持起点更可靠。
+    // 限时模式：以所有窗口共享的后端 startedAtMs 为锚，多屏倒计时才不会
+    // 各走各的；重开时后端刷新 startedAtMs，TimedClock 随之重置。
     const limit = this.state.limitMs;
-    if (limit > 0 && !this.state.finished) {
-      if (this.timedStartedAt === 0) this.timedStartedAt = Date.now();
-      const left = Math.max(0, limit - (Date.now() - this.timedStartedAt));
-      this.hudTime.textContent = t(
-        this.lang,
-        "hud.timeLeft",
-        { time: formatDuration(left) },
-      );
-      this.hudTime.classList.toggle("time-low", left <= limit * 0.2);
-      if (left === 0 && !this.timingOut) {
-        this.timingOut = true;
+    const timed = limit > 0 && !this.state.finished;
+    const tick = this.clock.tick(limit, this.state.startedAtMs, !timed);
+    if (timed) {
+      this.hudTime.title = t(this.lang, "overlay.timeLeftLabel");
+      if (tick.leftMs === 0) {
         this.hudTime.textContent = t(this.lang, "hud.timeUp");
-        void api
-          .finishRound(true)
-          .catch((error: unknown) => console.error("timeout finish failed", error));
+      } else {
+        this.hudTime.textContent = t(this.lang, "hud.timeLeft", {
+          time: formatDuration(tick.leftMs),
+        });
+      }
+      this.hudTime.classList.toggle("time-low", tick.leftMs <= limit * 0.2);
+      if (tick.expired) {
+        void api.finishRound(true).catch((error: unknown) => {
+          const payload = asAppError(error);
+          console.error("timeout finish failed", payload);
+          // 到点结算失败必须可见；否则 HUD 停在“时间到”，玩家却还能继续操作。
+          this.toast(errorText(this.lang, payload.code));
+        });
       }
       return;
     }
     this.hudTime.classList.remove("time-low");
+    this.hudTime.title = t(this.lang, "overlay.timeLabel");
     this.hudTime.textContent = formatDuration(elapsed);
   }
 
   private updateConfirmButton(): void {
     const ready = this.state.remaining === 0 && !this.state.finished;
     const appeared = ready && this.confirmButton.hidden;
+    const disappeared = !ready && !this.confirmButton.hidden;
     this.confirmButton.hidden = !ready;
     if (appeared) {
       // CSS 动画只在元素创建时跑一次；hidden→显示必须重播，否则用户看不到弹出。
       this.confirmButton.style.animation = "none";
       void this.confirmButton.offsetWidth;
       this.confirmButton.style.animation = "";
-      this.placeFloating();
     }
+    // 按钮显隐会改变 HUD 行宽；宽度变了要重新选位，否则胶囊会偏左/偏右。
+    if (appeared || disappeared) this.placeFloating();
   }
 
   // ---------------------------------------------------------------- cards
@@ -708,7 +739,7 @@ export class OverlayGame {
     this.dragListeners = null;
     window.removeEventListener("pointermove", listeners.move, true);
     window.removeEventListener("pointerup", listeners.end, true);
-    window.removeEventListener("pointercancel", listeners.end, true);
+    window.removeEventListener("pointercancel", listeners.cancel, true);
     window.removeEventListener("blur", listeners.cancel);
     window.removeEventListener("lostpointercapture", listeners.cancel, true);
   }
@@ -730,18 +761,18 @@ export class OverlayGame {
     // reduced-motion 用户保持纯平移。
     const rawTilt = Math.max(-3, Math.min(3, (event.clientX - drag.lastClientX) * 0.6));
     drag.tilt = drag.tilt * 0.8 + rawTilt * 0.2;
-    const tilt = window.matchMedia("(prefers-reduced-motion: reduce)").matches
-      ? 0
-      : drag.tilt;
+    const tilt = this.reducedMotion.matches ? 0 : drag.tilt;
     drag.element.style.transform =
       `translate3d(${drag.slotX + dx}px, ${drag.slotY + dy}px, 0) rotate(${tilt.toFixed(2)}deg)`;
 
     const point = this.globalPoint(event.clientX, event.clientY);
-    const target = this.hitTest(point.x, point.y);
+    const target = this.hitTest(point.x, point.y, event.clientX, event.clientY);
     if (target !== drag.hoverSlot) {
       drag.hoverSlot = target;
       this.applyHover(target);
     }
+    // 下一帧的“速度”要用本帧位置做差；不更新的话倾斜会锁死在 ±3°。
+    drag.lastClientX = event.clientX;
   }
 
   private finishDrag(event: PointerEvent | null): void {
@@ -768,9 +799,17 @@ export class OverlayGame {
     // armed 拖拽刚结束：浏览器还会派发一次 click。不抑制的话，click 会
     // 再走 onFaceClick → commitSelection，把第三张卡卷进同一次手势。
     this.suppressClick = true;
-    const suppressTimer = window.setTimeout(() => {
+    // 200ms 后恢复。不要在这里提前清掉：浏览器在 pointerup 之后仍会派发
+    // 一次 click，提前清标志会让“拖出去再拖回原位/空白”变成一次选中，
+    // 已有选中时甚至会静默交换两张牌。
+    window.setTimeout(() => {
       this.suppressClick = false;
     }, 200);
+    // 拖拽途中本局结束或进入退出演出：只归位，不发游戏命令。
+    if (this.state.finished || this.pending) {
+      drag.element.style.transform = back;
+      return;
+    }
     // 中断（失焦/捕获丢失）或落在空白/原处：弹回原位，绝不悬停。
     // 落点与悬停高亮同源：玩家看到哪格高亮，松手就换哪格。重新 hitTest
     // 用的是松手瞬间的新坐标，边界上高亮 B、落点却变成 C，看起来就像
@@ -778,8 +817,6 @@ export class OverlayGame {
     const target = event ? drag.hoverSlot : null;
     if (target === null || target === drag.fromSlot) {
       drag.element.style.transform = back;
-      window.clearTimeout(suppressTimer);
-      this.suppressClick = false;
       return;
     }
     const targetSlot = this.slots.get(target);
@@ -806,7 +843,24 @@ export class OverlayGame {
     };
   }
 
-  private hitTest(globalX: number, globalY: number): number | null {
+  private hitTest(
+    globalX: number,
+    globalY: number,
+    clientX?: number,
+    clientY?: number,
+  ): number | null {
+    // HUD/确认按钮在卡牌之上；拖到它们上面松手不能落到被挡住的卡。
+    if (clientX !== undefined && clientY !== undefined) {
+      const rect = this.hudWrap.getBoundingClientRect();
+      if (
+        clientX >= rect.left &&
+        clientX < rect.right &&
+        clientY >= rect.top &&
+        clientY < rect.bottom
+      ) {
+        return null;
+      }
+    }
     let best: { id: number; distance: number } | null = null;
     for (const slot of this.view.globalSlots) {
       const inside =
@@ -873,6 +927,8 @@ export class OverlayGame {
     this.selectedSlot = null;
     this.targetSlot = null;
     this.hudHint.hidden = true;
+    // 提示条隐藏后 HUD 行高变矮；不重新选位，胶囊会停在提示出现时的位置。
+    this.placeFloating();
   }
 
   private commitSelection(): void {
@@ -978,8 +1034,10 @@ export class OverlayGame {
     const panel = h("div", "modal");
     panel.setAttribute("role", "dialog");
     panel.setAttribute("aria-modal", "true");
-
-    panel.appendChild(h("p", "modal-title", t(this.lang, "result.title")));
+    const title = h("p", "modal-title", t(this.lang, "result.title"));
+    title.id = "result-title";
+    panel.setAttribute("aria-labelledby", title.id);
+    panel.appendChild(title);
     if (result.timedOut) {
       panel.appendChild(h("p", "modal-timed-out", t(this.lang, "result.timedOut")));
     }
@@ -1034,6 +1092,7 @@ export class OverlayGame {
           const payload = asAppError(error);
           console.error("replay failed", payload);
           this.toast(errorText(this.lang, payload.code));
+          this.sounds.error();
         });
     });
     actions.appendChild(replay);
@@ -1051,6 +1110,10 @@ export class OverlayGame {
       panel.appendChild(actions);
       panel.appendChild(h("p", "modal-note", t(this.lang, "result.demoNote")));
     } else {
+      // 超时结算允许空槽位，但写回要求每个槽位都有图标：空槽时保存是死路。
+      const canSave = this.state.placements.every(
+        (placed) => placed !== null && placed !== undefined,
+      );
       const save = h("button", "secondary-button");
       save.type = "button";
       save.appendChild(h("span", "", t(this.lang, "result.save")));
@@ -1065,11 +1128,14 @@ export class OverlayGame {
               this.pending = false;
               const payload = asAppError(error);
               console.error("save failed", payload);
+              // 另一块屏在演出期间开了新局时，本窗结算面板可能已被移除；
+              // 往脱离文档的 panel 里写错误 UI，用户永远看不到。
+              if (!panel.isConnected) return;
               this.showBusy(panel, errorText(this.lang, payload.code), true);
             });
         });
       });
-      actions.appendChild(save);
+      if (canSave) actions.appendChild(save);
 
       const restore = h("button", "text-button");
       restore.type = "button";
@@ -1085,13 +1151,20 @@ export class OverlayGame {
               this.pending = false;
               const payload = asAppError(error);
               console.error("restore failed", payload);
+              if (!panel.isConnected) return;
               this.showBusy(panel, errorText(this.lang, payload.code), true);
             });
         });
       });
       actions.appendChild(restore);
       panel.appendChild(actions);
-      panel.appendChild(h("p", "modal-note", t(this.lang, "result.saveNote")));
+      panel.appendChild(
+        h(
+          "p",
+          "modal-note",
+          t(this.lang, canSave ? "result.saveNote" : "result.incompleteNote"),
+        ),
+      );
     }
 
     // 复制结果：demo 与真实模式都提供；分享行走 i18n 模板，moves 用复数机制。
@@ -1105,20 +1178,7 @@ export class OverlayGame {
         time: formatDuration(result.elapsedMs),
         moves: tDynamic(this.lang, pluralKey("result.moves", result.moves), { n: result.moves }),
       });
-      void navigator.clipboard.writeText(line).then(() => {
-        this.toast(t(this.lang, "result.copied"));
-      }).catch(() => {
-        // WebView2 拒绝剪贴板 API 时退回 execCommand 兜底。
-        const area = document.createElement("textarea");
-        area.value = line;
-        area.style.position = "fixed";
-        area.style.opacity = "0";
-        document.body.appendChild(area);
-        area.select();
-        const ok = document.execCommand("copy");
-        area.remove();
-        this.toast(t(this.lang, ok ? "result.copied" : "result.copyFailed"));
-      });
+      this.copyText(line);
     });
     actions.appendChild(copy);
 
@@ -1126,6 +1186,34 @@ export class OverlayGame {
     this.resultLayer.hidden = false;
     const focusTarget = panel.querySelector<HTMLElement>("button");
     focusTarget?.focus({ preventScroll: true });
+  }
+
+  /** 剪贴板 API 可能不存在（受限上下文）也可能拒绝；两条路都要能复制。 */
+  private copyText(line: string): void {
+    try {
+      if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
+        void navigator.clipboard
+          .writeText(line)
+          .then(() => this.toast(t(this.lang, "result.copied")))
+          .catch(() => this.copyFallback(line));
+        return;
+      }
+    } catch {
+      // 属性访问被拒时直接走兜底。
+    }
+    this.copyFallback(line);
+  }
+
+  private copyFallback(line: string): void {
+    const area = document.createElement("textarea");
+    area.value = line;
+    area.style.position = "fixed";
+    area.style.opacity = "0";
+    document.body.appendChild(area);
+    area.select();
+    const ok = document.execCommand("copy");
+    area.remove();
+    this.toast(t(this.lang, ok ? "result.copied" : "result.copyFailed"));
   }
 
   private showBusy(panel: HTMLElement, message: string, failed = false): void {
@@ -1181,7 +1269,10 @@ export class OverlayGame {
     const panel = h("div", "modal modal-compact");
     panel.setAttribute("role", "dialog");
     panel.setAttribute("aria-modal", "true");
-    panel.appendChild(h("p", "modal-title", t(this.lang, "exit.title")));
+    const title = h("p", "modal-title", t(this.lang, "exit.title"));
+    title.id = "exit-title";
+    panel.setAttribute("aria-labelledby", title.id);
+    panel.appendChild(title);
     panel.appendChild(h("p", "modal-body", t(this.lang, "exit.body")));
     const actions = h("div", "modal-actions");
     const keep = h("button", "primary-button");
@@ -1200,6 +1291,7 @@ export class OverlayGame {
       clear(this.exitLayer);
       const cancelPanel = h("div", "modal modal-compact");
       cancelPanel.setAttribute("role", "dialog");
+      cancelPanel.setAttribute("aria-label", t(this.lang, "exit.title"));
       const cancel = h("button", "primary-button");
       cancel.type = "button";
       cancel.appendChild(h("span", "", t(this.lang, "exit.keep")));
@@ -1211,8 +1303,9 @@ export class OverlayGame {
       cancel.focus({ preventScroll: true });
       this.runExit(() => {
         void api.quitApp().catch((error) => {
-          this.pending = false;
-          this.choreography = null;
+          // 退出被拒（例如另一屏正在写回）：撤掉演出类，否则牌桌会停在
+          // “全部翻走”的空白状态，再点继续游戏也看不到牌。
+          this.cancelExit();
           this.toast(errorText(this.lang, asAppError(error).code));
         });
       });
@@ -1296,7 +1389,12 @@ export function renderFatal(root: HTMLElement, message: string, lang: Lang): voi
   root.classList.add("overlay-root");
   const layer = h("div", "modal-layer");
   const panel = h("div", "modal modal-compact");
-  panel.appendChild(h("p", "modal-title", t(lang, "app.name")));
+  panel.setAttribute("role", "dialog");
+  panel.setAttribute("aria-modal", "true");
+  const title = h("p", "modal-title", t(lang, "app.name"));
+  title.id = "fatal-title";
+  panel.setAttribute("aria-labelledby", title.id);
+  panel.appendChild(title);
   panel.appendChild(h("p", "modal-body", message));
   const actions = h("div", "modal-actions");
   const quit = h("button", "primary-button");

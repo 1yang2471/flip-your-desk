@@ -155,6 +155,11 @@ fn build_env_report(app: &AppHandle, muted: bool) -> AppResult<EnvReport> {
 #[tauri::command]
 fn probe_environment(app: AppHandle, state: State<'_, AppState>) -> AppResult<EnvReport> {
     let muted = lock_state(&state).muted;
+    // 上次恢复失败可能把图标留在隐藏态；用户点“重新检测”时顺带重试。
+    // 但局中绝不能恢复：那会把答案直接显示出来。
+    if lock_state(&state).round.is_none() {
+        let _ = restore_desktop_icons(&app);
+    }
     build_env_report(&app, muted)
 }
 
@@ -223,18 +228,34 @@ fn set_icon_marker(app: &AppHandle, present: bool) {
 }
 
 /// 恢复真实桌面图标（幂等）。所有退出、失败与超时路径都必须调用。
-fn restore_desktop_icons(app: &AppHandle) {
+///
+/// 只有真正恢复成功才清 marker/内存标志：恢复失败时把凭据留给下一次启动、
+/// 下一次探测或下一次退出重试，避免“失败一次就永久隐藏”。
+fn restore_desktop_icons(app: &AppHandle) -> bool {
     let state = app.state::<AppState>();
+    let marker = icon_marker_path(app)
+        .map(|path| path.exists())
+        .unwrap_or(false);
     let hidden = {
-        let mut inner = lock_state(&state);
-        let hidden = inner.icons_hidden;
-        inner.icons_hidden = false;
-        hidden
+        let inner = lock_state(&state);
+        inner.icons_hidden || marker
     };
-    if hidden {
-        let _ = platform::set_icons_visible(true);
+    if !hidden {
+        set_icon_marker(app, false);
+        return true;
     }
-    set_icon_marker(app, false);
+    match platform::set_icons_visible(true) {
+        Ok(()) => {
+            lock_state(&state).icons_hidden = false;
+            set_icon_marker(app, false);
+            true
+        }
+        Err(err) => {
+            eprintln!("restore desktop icons failed: {err}; keep marker for retry");
+            lock_state(&state).icons_hidden = true;
+            false
+        }
+    }
 }
 
 /// 写回前把原布局备份到 app_config_dir/original-layout.json，供人工恢复。
@@ -252,9 +273,18 @@ fn write_layout_backup(app: &AppHandle, original: &[IconWrite]) -> AppResult<()>
         .map_err(|err| AppError::with_detail("backup_failed", err.to_string()))?;
     std::fs::create_dir_all(&dir)
         .map_err(|err| AppError::with_detail("backup_failed", err.to_string()))?;
-    let tmp = dir.join("original-layout.json.tmp");
-    std::fs::write(&tmp, json)
-        .map_err(|err| AppError::with_detail("backup_failed", err.to_string()))?;
+    // tmp 名带 pid：双实例同时保存时不互相截断；sync_all 保证 rename 前
+    // 数据真的落盘（进程被杀安全，断电也不留半截 JSON）。
+    let tmp = dir.join(format!("original-layout.json.{}.tmp", std::process::id()));
+    {
+        use std::io::Write;
+        let mut file = std::fs::File::create(&tmp)
+            .map_err(|err| AppError::with_detail("backup_failed", err.to_string()))?;
+        file.write_all(json.as_bytes())
+            .map_err(|err| AppError::with_detail("backup_failed", err.to_string()))?;
+        file.sync_all()
+            .map_err(|err| AppError::with_detail("backup_failed", err.to_string()))?;
+    }
     let path = dir.join("original-layout.json");
     std::fs::rename(&tmp, &path)
         .map_err(|err| AppError::with_detail("backup_failed", err.to_string()))?;
@@ -351,18 +381,35 @@ async fn start_round(
     if mock && !cfg!(debug_assertions) {
         return Err(AppError::new("mock_not_available"));
     }
+    {
+        let inner = lock_state(&state);
+        if inner.writing {
+            return Err(AppError::new("write_in_progress"));
+        }
+        // restore 会把图标显示出来；局中重入 start 等于直接把答案翻开。
+        if inner.round.is_some() {
+            return Err(AppError::new("round_in_progress"));
+        }
+    }
 
-    // 上一局若异常退出可能留下隐藏态，先恢复再用它拍快照。
-    restore_desktop_icons(&app);
+    // 上一局若异常退出可能留下隐藏态，先恢复再用它拍快照。恢复不了就别开局：
+    // 继续 capture 也只会得到 icons_hidden，还会让用户以为只是“暂时没反应”。
+    if !restore_desktop_icons(&app) {
+        return Err(AppError::new("icon_visibility_toggle_failed"));
+    }
 
     // capture 是重阻塞的 Win32 侦察（跨进程消息 + 两次全屏截图），
     // 放进阻塞线程池，避免占用 async 工作线程拖慢其它窗口的 IPC。
     let snapshot = if mock {
         game::mock_snapshot(&monitors)
     } else {
+        // 意图先落盘：capture 内部隐藏图标后若线程 panic / 进程被强杀，
+        // 下一次启动仍能凭 marker 恢复，不会把用户桌面永久留在隐藏态。
+        lock_state(&state).icons_hidden = true;
+        set_icon_marker(&app, true);
         let monitors_for_capture = monitors.clone();
         let app_for_capture = app.clone();
-        let captured = tauri::async_runtime::spawn_blocking(move || {
+        let captured = match tauri::async_runtime::spawn_blocking(move || {
             platform::capture(&monitors_for_capture, |done, total| {
                 let _ = app_for_capture.emit(
                     "capture-progress",
@@ -371,10 +418,19 @@ async fn start_round(
             })
         })
         .await
-        .map_err(AppError::from)??;
-        // capture 成功后真实图标保持隐藏，整局都用它盖住答案。
-        lock_state(&state).icons_hidden = true;
-        set_icon_marker(&app, true);
+        {
+            Ok(Ok(captured)) => captured,
+            Ok(Err(err)) => {
+                let _ = restore_desktop_icons(&app);
+                return Err(err);
+            }
+            Err(err) => {
+                // JoinError：capture 内部 panic 或任务被取消。图标可能已隐藏，
+                // 必须立刻走恢复；恢复失败则 marker 留着下次再试。
+                let _ = restore_desktop_icons(&app);
+                return Err(AppError::from(err));
+            }
+        };
         Snapshot {
             icons: captured.icons,
             monitors: monitors.clone(),
@@ -383,7 +439,7 @@ async fn start_round(
     };
 
     if snapshot.icons.len() < 2 {
-        restore_desktop_icons(&app);
+        let _ = restore_desktop_icons(&app);
         return Err(AppError::new("too_few_icons"));
     }
 
@@ -408,7 +464,7 @@ async fn start_round(
 
     if let Err(err) = create_overlays(&app, &monitors) {
         lock_state(&state).round = None;
-        restore_desktop_icons(&app);
+        let _ = restore_desktop_icons(&app);
         return Err(err);
     }
 
@@ -434,7 +490,7 @@ fn spawn_overlay_timeout(app: AppHandle, token: u64, overlay_count: usize) {
         inner.round = None;
         drop(inner);
         close_overlays(&app, count);
-        restore_desktop_icons(&app);
+        let _ = restore_desktop_icons(&app);
         if let Some(launcher) = app.get_webview_window("launcher") {
             let _ = launcher.show();
             let _ = launcher.set_focus();
@@ -551,6 +607,9 @@ fn finish_round(
 ) -> AppResult<RoundResult> {
     let (result, public) = {
         let mut inner = lock_state(&state);
+        if inner.writing {
+            return Err(AppError::new("write_in_progress"));
+        }
         let round = inner
             .round
             .as_mut()
@@ -573,11 +632,17 @@ fn replay_round(app: AppHandle, state: State<'_, AppState>) -> AppResult<()> {
         if inner.writing {
             return Err(AppError::new("write_in_progress"));
         }
+        let icons_hidden = inner.icons_hidden;
         let round = inner
             .round
             .as_mut()
             .ok_or_else(|| AppError::new("no_round"))?;
-        round.replay();
+        // 保存失败后真实图标已经恢复可见；此时再开一局，透明卡面/卡缝会
+        // 直接把答案漏出来。拒绝重开，让用户重新启动一局。
+        if !round.mock && !icons_hidden {
+            return Err(AppError::new("replay_unavailable"));
+        }
+        round.replay()?;
         round.public_state()
     };
     emit_state(&app, &public);
@@ -636,19 +701,12 @@ async fn save_and_exit(app: AppHandle, state: State<'_, AppState>) -> AppResult<
     }
     // 写回前先让真实图标回到桌面：apply_positions 需要图标可见，
     // 视觉上也更自然（图标当场移动到最终位置）。
-    restore_desktop_icons(&app);
+    let _ = restore_desktop_icons(&app);
     // 写回可能耗时数秒（每项写入+读回校验），放阻塞线程池，期间 writing
     // 标志挡住退出与游戏命令，防止半残桌面。
-    let outcome = tauri::async_runtime::spawn_blocking(move || {
+    let outcome = match tauri::async_runtime::spawn_blocking(move || {
         match platform::apply_positions(&positions) {
             Ok(report) => {
-                if !report.skipped_missing.is_empty() {
-                    // 玩到一半被删/改名的图标无从移动，就此留在原处，如实记录。
-                    eprintln!(
-                        "save: moved {}, missing {:?}",
-                        report.moved, report.skipped_missing
-                    );
-                }
                 if report.failed_write.is_empty() {
                     None
                 } else {
@@ -663,11 +721,16 @@ async fn save_and_exit(app: AppHandle, state: State<'_, AppState>) -> AppResult<
                 }
             }
             Err(err) => {
-                // 写入前失败（自动排列/图标隐藏/标签读不到）时桌面一个字节都没动，
-                // 原样上报准确原因，不要谎报"恢复失败"。
+                // 写前预检失败（自动排列/图标隐藏/标签读不到/图标集合或显示器
+                // 拓扑变化）时桌面一个字节都没动，原样上报准确原因，不要谎报
+                // "恢复失败"。
                 if matches!(
                     err.code.as_str(),
-                    "auto_arrange_on" | "icons_hidden" | "desktop_labels_unavailable"
+                    "auto_arrange_on"
+                        | "icons_hidden"
+                        | "desktop_labels_unavailable"
+                        | "desktop_mismatch"
+                        | "desktop_topology_changed"
                 ) {
                     Some(err)
                 } else {
@@ -682,7 +745,15 @@ async fn save_and_exit(app: AppHandle, state: State<'_, AppState>) -> AppResult<
         }
     })
     .await
-    .map_err(AppError::from)?;
+    {
+        Ok(outcome) => outcome,
+        Err(err) => {
+            // spawn_blocking panic/取消时也必须放开 writing，否则应用永久卡在
+            // “写回中”，连退出都被拒绝。
+            lock_state(&state).writing = false;
+            return Err(AppError::from(err));
+        }
+    };
 
     match outcome {
         None => {
@@ -700,16 +771,14 @@ async fn save_and_exit(app: AppHandle, state: State<'_, AppState>) -> AppResult<
 /// 回滚是否真的回到了原布局（逐项校验过才算）。
 fn rollback_ok(original: &[IconWrite]) -> bool {
     platform::apply_positions(original)
-        // skipped_missing 非空 = 有原图标在桌面上找不到、没被移回原位，
-        // 不能算"已恢复原布局"。
-        .map(|report| report.failed_write.is_empty() && report.skipped_missing.is_empty())
+        .map(|report| report.failed_write.is_empty())
         .unwrap_or(false)
 }
 
 #[tauri::command]
 async fn restore_and_exit(app: AppHandle, state: State<'_, AppState>) -> AppResult<()> {
     let (original, mock) = {
-        let inner = lock_state(&state);
+        let mut inner = lock_state(&state);
         if inner.writing {
             return Err(AppError::new("write_in_progress"));
         }
@@ -717,17 +786,20 @@ async fn restore_and_exit(app: AppHandle, state: State<'_, AppState>) -> AppResu
             .round
             .as_ref()
             .ok_or_else(|| AppError::new("no_round"))?;
-        (round.original_positions(), round.mock)
+        let original = round.original_positions();
+        let mock = round.mock;
+        // 检查与置位必须在同一临界区：否则两块屏同时点“恢复/保存”会
+        // 双双通过检查，然后并发写同一个 listview。
+        if !mock {
+            inner.writing = true;
+        }
+        (original, mock)
     };
     if mock {
         app.exit(0);
         return Ok(());
     }
-    restore_desktop_icons(&app);
-    {
-        let mut inner = lock_state(&state);
-        inner.writing = true;
-    }
+    let _ = restore_desktop_icons(&app);
     // 游戏进行中从不移动真实图标，恢复只是保险带：无论写回成败都退出，
     // 绝不把用户困在“恢复失败”的重试循环里。
     let outcome = tauri::async_runtime::spawn_blocking(move || {
@@ -745,10 +817,16 @@ async fn restore_and_exit(app: AppHandle, state: State<'_, AppState>) -> AppResu
 
 #[tauri::command]
 fn quit_app(app: AppHandle, state: State<'_, AppState>) -> AppResult<()> {
-    if lock_state(&state).writing {
-        return Err(AppError::new("write_in_progress"));
+    {
+        let mut inner = lock_state(&state);
+        if inner.writing {
+            return Err(AppError::new("write_in_progress"));
+        }
+        // 用 writing 作为终止锁：检查后到 exit(0) 之间不允许另一块屏
+        // 再发起保存/恢复。
+        inner.writing = true;
     }
-    restore_desktop_icons(&app);
+    let _ = restore_desktop_icons(&app);
     app.exit(0);
     Ok(())
 }
@@ -770,15 +848,20 @@ pub fn run() {
                 if window.label().starts_with("overlay-") {
                     let handle = window.app_handle();
                     let state = handle.state::<AppState>();
-                    if lock_state(&state).writing {
-                        // 写回桌面布局途中 Alt+F4 会留下半残桌面：先挡住。
-                        api.prevent_close();
-                        return;
+                    {
+                        let mut inner = lock_state(&state);
+                        if inner.writing {
+                            // 写回桌面布局途中 Alt+F4 会留下半残桌面：先挡住。
+                            api.prevent_close();
+                            return;
+                        }
+                        // 与其它退出路径共用终止锁：关闭过程中禁止再开写。
+                        inner.writing = true;
                     }
                     // 外部（例如全屏游戏）强制关闭覆盖窗：先挡住，再安全退出，
                     // 避免留下隐藏的启动窗和不可用状态。
                     api.prevent_close();
-                    restore_desktop_icons(handle);
+                    let _ = restore_desktop_icons(handle);
                     handle.exit(0);
                 }
             }
@@ -790,8 +873,13 @@ pub fn run() {
                 .map(|p| p.exists())
                 .unwrap_or(false)
             {
-                let _ = platform::set_icons_visible(true);
-                set_icon_marker(handle, false);
+                // 恢复失败时保留 marker：下一次探测/开局/退出还会重试。
+                match platform::set_icons_visible(true) {
+                    Ok(()) => set_icon_marker(handle, false),
+                    Err(err) => {
+                        eprintln!("startup icon restore failed: {err}; marker kept for retry")
+                    }
+                }
             }
             Ok(())
         })

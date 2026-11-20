@@ -213,7 +213,9 @@ button {
 .head-actions {
   display: flex;
   align-items: center;
-  gap: 4px;
+  /* 44px 命中区以 30px 按钮为中心各外扩 7px；间距小于 14px 会让相邻
+     按钮的热区重叠（最右的关闭键会吃掉最小化键的右半边点击）。 */
+  gap: 16px;
   flex: 0 0 auto;
 }
 
@@ -270,7 +272,7 @@ button {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  font-size: 11px;
+  font-size: 12px;
   color: var(--text-2);
 }
 
@@ -373,7 +375,7 @@ button {
 
 .issue-title {
   margin: 0;
-  font-size: 11px;
+  font-size: 12px;
   color: var(--text-3);
 }
 
@@ -420,7 +422,7 @@ button {
 
 .howto-title {
   margin: 0;
-  font-size: 11px;
+  font-size: 12px;
   color: var(--text-3);
 }
 
@@ -440,9 +442,10 @@ button {
 }
 
 .howto-index {
-  font-size: 11px;
+  font-size: 12px;
   letter-spacing: 0.08em;
-  color: var(--accent-deep);
+  /* accent-deep 在 ink-900 上约 3.3:1，不到小字 4.5:1；用亮金。 */
+  color: var(--accent);
   font-variant-numeric: tabular-nums;
 }
 
@@ -519,6 +522,7 @@ button {
 /* 结算界面的「超时结束」标记。 */
 .modal-timed-out {
   margin: 4px 0 0;
+  text-align: center;
   color: var(--accent);
   font-size: 12px;
   letter-spacing: 0.04em;
@@ -587,7 +591,7 @@ button {
 .start-hint {
   margin: -8px 0 0;
   text-align: center;
-  font-size: 11px;
+  font-size: 12px;
   color: var(--text-3);
 }
 
@@ -598,7 +602,7 @@ button {
 .launcher-footer {
   margin-top: auto;
   padding-top: 4px;
-  font-size: 11px;
+  font-size: 12px;
   color: var(--text-3);
 }
 
@@ -650,7 +654,7 @@ button {
   appearance: none;
   touch-action: none;
   transition: transform 260ms var(--ease);
-  will-change: transform;
+  /* 不给整副牌常驻 will-change：120 张卡会各自占一层合成层。拖动时才提升。 */
 }
 
 /* 卡片只用鼠标操作。focus 仅用于让 focusable(false) 的覆盖窗收到 keydown
@@ -658,6 +662,14 @@ button {
    的金框叠成两圈，取消选中后还会残留一圈。HUD/弹窗按钮的焦点环不受影响。 */
 .card:focus-visible {
   outline: none;
+}
+
+/* 卡片外框留给 .is-selected 的整格金框；键盘 Tab 到未选中的卡时，
+   在内层画一圈替代焦点环，避免“移除焦点指示但无替代”。 */
+.card:focus-visible:not(.is-selected) .card-inner {
+  outline: 2px solid var(--accent);
+  outline-offset: -3px;
+  border-radius: 12px;
 }
 
 /* 正反两面共用整格盒模型：卡背与卡面的可见盒必须同为整格（用户设定）。
@@ -877,7 +889,7 @@ button {
   max-width: 100%;
   max-height: 2.4em;
   overflow: hidden;
-  font-size: 10px;
+  font-size: 12px;
   line-height: 1.2;
   text-align: center;
   color: var(--ink-900);
@@ -901,6 +913,7 @@ button {
 .card.is-dragging {
   cursor: grabbing;
   z-index: 30;
+  will-change: transform;
 }
 
 /* 卡背拖动可轻微放大；透明卡面必须保持原尺寸，只用边缘发光提示。 */
@@ -1029,6 +1042,12 @@ button {
   color: var(--text-1);
 }
 
+/* 24px 按钮的 44px 热区每侧外扩 10px；两个相邻按钮中心距至少要 44px，
+   否则静音键的右半边会落到退出键上。 */
+.hud-button + .hud-button {
+  margin-left: 14px;
+}
+
 .hud-hint {
   margin-top: 8px;
   max-width: 380px;
@@ -1037,7 +1056,7 @@ button {
   background: rgba(16, 18, 22, 0.88);
   border: 1px solid rgba(255, 255, 255, 0.1);
   color: var(--text-2);
-  font-size: 11px;
+  font-size: 12px;
   line-height: 1.45;
 }
 
@@ -1141,7 +1160,7 @@ button {
 }
 
 .result-label {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--text-3);
 }
 
@@ -1190,10 +1209,15 @@ button {
   gap: 8px;
 }
 
+/* 文字型次级动作（回到原布局/复制结果）是整行按钮的补充，居中才像同一组。 */
+.modal-actions .text-button {
+  justify-self: center;
+}
+
 .modal-note {
   margin: 0;
   text-align: center;
-  font-size: 11px;
+  font-size: 12px;
   line-height: 1.45;
   color: var(--text-3);
 }
@@ -1218,7 +1242,8 @@ button {
   left: 50%;
   bottom: 96px;
   transform: translateX(-50%);
-  z-index: 80;
+  /* 结算面板 z=90；复制/重开失败的反馈必须在它之上，不能被遮罩压暗。 */
+  z-index: 100;
   max-width: 420px;
   padding: 8px 14px;
   border-radius: 10px;

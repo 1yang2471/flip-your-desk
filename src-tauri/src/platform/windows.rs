@@ -79,6 +79,13 @@ struct LvItemW {
     i_group: i32,
 }
 
+const _: () = assert!(TEXT_OFFSET + 512 * 2 <= REMOTE_SIZE);
+
+// 必须与 commctrl.h 的 LVITEMW 完全一致（x64 实测 88 字节）；
+// 布局漂移会静默写错 explorer 的内存。
+#[cfg(target_pointer_width = "64")]
+const _: () = assert!(std::mem::size_of::<LvItemW>() == 88);
+
 struct ProcessHandle(HANDLE);
 
 impl Drop for ProcessHandle {
@@ -94,6 +101,7 @@ impl Drop for ProcessHandle {
 struct RemoteBuffer {
     process: HANDLE,
     ptr: *mut c_void,
+    capacity: usize,
 }
 
 impl RemoteBuffer {
@@ -113,10 +121,30 @@ impl RemoteBuffer {
                 "VirtualAllocEx failed",
             ));
         }
-        Ok(Self { process, ptr })
+        Ok(Self {
+            process,
+            ptr,
+            capacity: size,
+        })
+    }
+
+    fn fits(&self, offset: usize, size: usize) -> bool {
+        offset
+            .checked_add(size)
+            .is_some_and(|end| end <= self.capacity)
     }
 
     fn write<T>(&self, offset: usize, value: &T) -> AppResult<()> {
+        let size = std::mem::size_of::<T>();
+        if !self.fits(offset, size) {
+            return Err(AppError::with_detail(
+                "remote_write",
+                format!(
+                    "remote buffer overflow: {offset}+{size} > {}",
+                    self.capacity
+                ),
+            ));
+        }
         unsafe {
             WriteProcessMemory(
                 self.process,
@@ -130,6 +158,16 @@ impl RemoteBuffer {
     }
 
     fn read<T: Copy>(&self, offset: usize) -> AppResult<T> {
+        let size = std::mem::size_of::<T>();
+        if !self.fits(offset, size) {
+            return Err(AppError::with_detail(
+                "remote_read",
+                format!(
+                    "remote buffer overflow: {offset}+{size} > {}",
+                    self.capacity
+                ),
+            ));
+        }
         let mut value: T = unsafe { std::mem::zeroed() };
         unsafe {
             ReadProcessMemory(
@@ -161,9 +199,11 @@ struct Desktop {
     progman: HWND,
     defview: HWND,
     listview: HWND,
-    _process: ProcessHandle,
     process_handle: HANDLE,
+    /// 字段按声明顺序 Drop：remote 必须先于 _process 释放，否则
+    /// VirtualFreeEx 会拿着已经 CloseHandle 的句柄在 explorer 里泄漏 64KB。
     remote: RemoteBuffer,
+    _process: ProcessHandle,
 }
 
 impl Desktop {
@@ -240,11 +280,19 @@ impl Desktop {
     fn item_position(&self, index: usize) -> AppResult<POINT> {
         let point = POINT { x: 0, y: 0 };
         self.remote.write(0, &point)?;
-        self.send(listview_msg(
+        let ok = self.send(listview_msg(
             LVM_GETITEMPOSITION,
             index,
             self.remote.ptr_at(0) as isize,
         ))?;
+        // 失败时缓冲区仍是预写的 (0,0)，ClientToScreen 会把它变成客户区原点，
+        // 看起来像一张落在左上角的“正常”牌；必须按返回值拒绝。
+        if ok == 0 {
+            return Err(AppError::with_detail(
+                "desktop_read",
+                format!("LVM_GETITEMPOSITION({index}) failed"),
+            ));
+        }
         let mut point: POINT = self.remote.read(0)?;
         if !unsafe { ClientToScreen(self.listview, &mut point) }.as_bool() {
             return Err(AppError::with_detail(
@@ -372,6 +420,14 @@ impl Desktop {
                 y: position.y,
             });
         }
+        // 位置与名字是两条独立消息：期间增删图标会让索引错位。读完后再数一次，
+        // 数量变了就整体作废，调用方会回滚/重试，而不是把 A 的名字配给 B。
+        if self.count()? != count {
+            return Err(AppError::with_detail(
+                "desktop_changed",
+                "item count changed while reading",
+            ));
+        }
         Ok((count, items, spacing))
     }
 
@@ -426,13 +482,15 @@ impl Desktop {
         Ok(result as isize)
     }
 
-    /// 按名定位写入 + 写后校验：候选按「离图标原位置最近」选（同名图标靠
-    /// 原位消歧，避免把 A 的坐标写到同名的 B 上），每轮重扫条目以免索引漂移；
-    /// 写后按名读回校验落位（±2px）。
+    /// 按「开局解析出的条目索引」写入 + 写后校验（±2px）。
+    ///
+    /// 同名图标不能按名找“任意一个落在目标”就宣告成功：A1、A2 都叫 A 时，
+    /// A1 的写入即使完全没生效，也会被 A2 已在目标点满足。索引在列表未增删
+    /// 时稳定；若索引漂移则只在名字唯一时退回按名定位，同名歧义直接报
+    /// desktop_changed，交给整批回滚。
     fn set_item_position(
         &self,
-        orig_x: i32,
-        orig_y: i32,
+        preferred_index: usize,
         target_x: i32,
         target_y: i32,
         expected_name: &str,
@@ -440,18 +498,16 @@ impl Desktop {
         let mut last_seen: Option<(i32, i32)> = None;
         for _round in 0..3 {
             let (_, items, _) = self.read_items()?;
-            let index = items
-                .iter()
-                .enumerate()
-                .filter(|(_, it)| it.name == expected_name)
-                .min_by_key(|(_, it)| (it.x - orig_x).abs() as i64 + (it.y - orig_y).abs() as i64)
-                .map(|(i, _)| i);
-            let Some(index) = index else {
+            let Some(index) = locate_item(&items, preferred_index, expected_name) else {
                 return Err(AppError::with_detail(
                     "desktop_changed",
-                    format!("\"{expected_name}\" 消失于写回途中"),
+                    format!("\"{expected_name}\" 消失或索引歧义于写回途中"),
                 ));
             };
+            let current = &items[index];
+            if current.x == target_x && current.y == target_y {
+                return Ok(());
+            }
             let mut point = POINT {
                 x: target_x,
                 y: target_y,
@@ -466,17 +522,12 @@ impl Desktop {
             // 写的是垃圾位置。返回值不可信（Explorer 可能返回 0 但已生效），
             // 一律以读回坐标为准。
             let _ = self.raw_set_item_position(index, point.x, point.y)?;
-            // 每次写都可能触发 z 序重排，写后重扫按名验证，不按旧索引读。
             let (_, after, _) = self.read_items()?;
-            last_seen = after
-                .iter()
-                .find(|it| it.name == expected_name)
-                .map(|it| (it.x, it.y));
-            let landed = after.iter().any(|it| {
-                it.name == expected_name
-                    && (it.x - target_x).abs() <= 2
-                    && (it.y - target_y).abs() <= 2
-            });
+            let seen = locate_item(&after, preferred_index, expected_name).map(|i| &after[i]);
+            last_seen = seen.map(|it| (it.x, it.y));
+            let landed = seen
+                .map(|it| (it.x - target_x).abs() <= 2 && (it.y - target_y).abs() <= 2)
+                .unwrap_or(false);
             if landed {
                 return Ok(());
             }
@@ -515,6 +566,23 @@ struct PointItem {
     name: String,
     x: i32,
     y: i32,
+}
+
+/// 优先用开局配对出的索引；索引漂移时仅在名字唯一时退回按名定位。
+/// 同名不允许按名兜底——那正是“A1 没动、A2 已在目标”假成功的来源。
+fn locate_item(items: &[PointItem], preferred: usize, name: &str) -> Option<usize> {
+    if items.get(preferred).is_some_and(|item| item.name == name) {
+        return Some(preferred);
+    }
+    let mut matches = items
+        .iter()
+        .enumerate()
+        .filter(|(_, item)| item.name == name);
+    let first = matches.next()?;
+    if matches.next().is_some() {
+        return None;
+    }
+    Some(first.0)
 }
 
 fn listview_msg(msg: u32, wparam: usize, lparam: isize) -> (u32, usize, isize) {
@@ -620,6 +688,12 @@ fn capture_window(hwnd: HWND) -> AppResult<(RgbaImage, RECT)> {
         .map_err(|err| AppError::with_detail("screen_capture_failed", err.to_string()))?;
     let width = (rect.right - rect.left).max(1);
     let height = (rect.bottom - rect.top).max(1);
+    if width < 8 || height < 8 {
+        return Err(AppError::with_detail(
+            "screen_capture_failed",
+            format!("desktop rect too small: {width}x{height}"),
+        ));
+    }
 
     let screen_dc = unsafe { GetDC(None) };
     if screen_dc.0.is_null() {
@@ -1089,6 +1163,27 @@ pub fn pin_window_over_desktop(hwnd: isize) -> AppResult<()> {
     .map_err(|err| AppError::with_detail("pin_over_desktop", err.to_string()))
 }
 
+/// 过滤掉中心不在任一显示器工作区的图标，同时保留它们在原始 listview 的
+/// 索引。id 必须是过滤后的 0..len；而 LVM_GETITEMRECT 必须用原始索引。
+fn items_in_monitors(
+    items: Vec<PointItem>,
+    spacing: (i32, i32),
+    monitors: &[MonitorInfo],
+) -> (Vec<usize>, Vec<PointItem>) {
+    let covered: Vec<RectI> = monitors.iter().map(|monitor| monitor.rect()).collect();
+    let mut source_indices = Vec::new();
+    let mut kept = Vec::new();
+    for (index, item) in items.into_iter().enumerate() {
+        let cx = item.x + spacing.0 / 2;
+        let cy = item.y + spacing.1 / 2;
+        if covered.iter().any(|rect| rect.contains(cx, cy)) {
+            source_indices.push(index);
+            kept.push(item);
+        }
+    }
+    (source_indices, kept)
+}
+
 /// 把 0..total 切成 ≤parts 个连续区间（并行分片用）；total=0 返回空。
 fn capture_chunk_ranges(total: usize, parts: usize) -> Vec<std::ops::Range<usize>> {
     if total == 0 {
@@ -1118,29 +1213,38 @@ pub fn capture(
     if desktop.auto_arrange() {
         return Err(AppError::new("auto_arrange_on"));
     }
-    let (count, mut items, spacing) = desktop.read_items()?;
+    let (count, items, spacing) = desktop.read_items()?;
     if count < 2 {
         return Err(AppError::new("too_few_icons"));
     }
     // 桌面图标太多会滚动、图标也可能被拖进任务栏条后面：这些格子做不成
     // 可点击的牌（卡在覆盖层外），直接不进本局，真身留在原处不被写回触碰。
-    let covered: Vec<RectI> = monitors.iter().map(|monitor| monitor.rect()).collect();
-    items.retain(|item| {
-        let cx = item.x + spacing.0 / 2;
-        let cy = item.y + spacing.1 / 2;
-        covered.iter().any(|rect| rect.contains(cx, cy))
-    });
+    let (source_indices, items) = items_in_monitors(items, spacing, monitors);
+    if items.len() < 2 {
+        return Err(AppError::new("too_few_icons"));
+    }
     desktop.clear_selection()?;
 
     let (capture_hwnd, origin) = capture_bounds(&desktop)?;
-    let (with_icons, _) = capture_window(capture_hwnd)?;
+    let (with_icons, with_rect) = capture_window(capture_hwnd)?;
+    if with_rect != origin {
+        return Err(AppError::with_detail(
+            "screen_capture_failed",
+            "desktop rect changed before capture",
+        ));
+    }
 
     // 隐藏真实图标拍“干净”背景。成功后保持隐藏（整局都用它盖住答案，
-    // 否则卡牌缝隙与拖动后的空位会漏出真实图标）；失败则由 Guard 的
-    // Drop 自动恢复，绝不把桌面停在隐藏态。
+    // 否则卡牌缝隙与拖动后的空位会漏出真实图标）；失败或后续任一阶段
+    // panic 都由 Guard 的 Drop 自动恢复，绝不把桌面停在隐藏态。
     let mut guard = VisibilityGuard::hide(&desktop)?;
-    let (clean, _) = capture_window(capture_hwnd)?;
-    guard.commit();
+    let (clean, clean_rect) = capture_window(capture_hwnd)?;
+    if clean_rect != origin {
+        return Err(AppError::with_detail(
+            "screen_capture_failed",
+            "desktop rect changed between captures",
+        ));
+    }
 
     // id 必须是 0..len 连续：它同时是游戏槽位号（placements 按此索引），
     // 过滤掉屏外图标后不能再沿用原始 listview 索引。
@@ -1154,8 +1258,9 @@ pub fn capture(
     };
     // 阶段一（串行）：label_rect 走跨进程 SendMessage，多线程并发发消息
     // 收益小风险高——在进入并行区之前一次性收齐。
-    let label_rects: Vec<Option<RECT>> = (0..items.len())
-        .map(|slot| desktop.item_rect(slot, LVIR_LABEL).ok().flatten())
+    let label_rects: Vec<Option<RECT>> = source_indices
+        .iter()
+        .map(|index| desktop.item_rect(*index, LVIR_LABEL).ok().flatten())
         .collect();
 
     // 阶段二（并行）：extract_cell / encode_png_data_url / tone_for_cell
@@ -1165,12 +1270,16 @@ pub fn capture(
         .unwrap_or(4)
         .max(1);
     let ranges = capture_chunk_ranges(items.len(), threads);
+    let done = std::sync::atomic::AtomicUsize::new(0);
     let icons: Vec<IconRecord> = {
         // move 闭包改捕获共享引用（Copy），避免把 Vec 本体 move 进第一个线程。
         let items = &items;
         let label_rects = &label_rects;
         let with_icons = &with_icons;
         let clean = &clean;
+        let progress = &progress;
+        let done = &done;
+        let total = items.len();
         let scope_result = std::thread::scope(|scope| {
             let handles: Vec<_> = ranges
                 .into_iter()
@@ -1208,6 +1317,10 @@ pub fn capture(
                                 label: extract.label,
                             });
                         }
+                        let finished = done
+                            .fetch_add(chunk.len(), std::sync::atomic::Ordering::Relaxed)
+                            + chunk.len();
+                        progress(finished, total);
                         chunk
                     })
                 })
@@ -1219,6 +1332,8 @@ pub fn capture(
         });
         scope_result.into_iter().flatten().collect()
     };
+    // 全部像素工作完成后才交棒：中途 panic 仍由 guard Drop 恢复桌面图标。
+    guard.commit();
     progress(items.len(), items.len());
 
     Ok(Captured { icons, label_font })
@@ -1285,24 +1400,45 @@ pub fn apply_positions(positions: &[IconWrite]) -> AppResult<ApplyReport> {
         std::thread::sleep(Duration::from_millis(200));
     }
     if !labels_ready {
-        eprintln!("apply: labels unavailable after 3s wait");
+        eprintln!("apply: labels unavailable after 10s wait");
         return Err(AppError::new("desktop_labels_unavailable"));
     }
-    let (_, items, _) = desktop.read_items()?;
+    let (_, items, spacing) = desktop.read_items()?;
+    // 局中拔屏/改分辨率后，快照里的目标点可能已不在当前虚拟屏内；Explorer
+    // 会接受任意坐标，图标就“消失”在屏外。写前统一拒绝，别静默写坏。
+    let vw = unsafe { GetSystemMetrics(SM_CXVIRTUALSCREEN) };
+    let vh = unsafe { GetSystemMetrics(SM_CYVIRTUALSCREEN) };
+    if vw > 0 && vh > 0 {
+        let virtual_rect = RectI {
+            x: unsafe { GetSystemMetrics(SM_XVIRTUALSCREEN) },
+            y: unsafe { GetSystemMetrics(SM_YVIRTUALSCREEN) },
+            w: vw,
+            h: vh,
+        };
+        let offscreen = offscreen_targets(positions, spacing, virtual_rect);
+        if !offscreen.is_empty() {
+            return Err(AppError::with_detail(
+                "desktop_topology_changed",
+                format!("offscreen targets: {offscreen:?}"),
+            ));
+        }
+    }
     // 以名字为身份把目标配到当前桌面项上；同名图标取离目标位置最近的一个。
     let (resolved, missing) = resolve_targets(positions, &items);
+    // 预检缺项：不要“移动能找到的，跳过找不到的”然后报成功退出。只要本局
+    // 的任一图标消失/改名，整批中止，桌面一个字节都不动。
+    if !missing.is_empty() {
+        return Err(AppError::with_detail(
+            "desktop_mismatch",
+            format!("missing targets: {missing:?}"),
+        ));
+    }
     let mut failed_write: Vec<String> = Vec::new();
     for target in &resolved {
         // explorer 瞬时忙碌会让单条 LVM 写入被拒：重试几次再放弃。
         let mut ok = false;
         for attempt in 0..3 {
-            match desktop.set_item_position(
-                target.orig_x,
-                target.orig_y,
-                target.x,
-                target.y,
-                &target.name,
-            ) {
+            match desktop.set_item_position(target.index, target.x, target.y, &target.name) {
                 Ok(()) => {
                     ok = true;
                     break;
@@ -1330,9 +1466,22 @@ pub fn apply_positions(positions: &[IconWrite]) -> AppResult<ApplyReport> {
     }
     Ok(ApplyReport {
         moved: resolved.len() - failed_write.len(),
-        skipped_missing: missing,
         failed_write,
     })
+}
+
+/// 目标格中心是否仍在当前虚拟屏内。目标点来自开局快照，局中拔屏/改分辨率后
+/// 可能落到不存在的坐标；必须先拒绝，不能让 Explorer 把图标写到屏外。
+fn offscreen_targets(
+    positions: &[IconWrite],
+    spacing: (i32, i32),
+    virtual_rect: RectI,
+) -> Vec<String> {
+    positions
+        .iter()
+        .filter(|target| !virtual_rect.contains(target.x + spacing.0 / 2, target.y + spacing.1 / 2))
+        .map(|target| target.name.clone())
+        .collect()
 }
 
 /// 目标与当前桌面项的配对：同名取离目标位置最近的一个，已配对的不复用。
@@ -1365,8 +1514,6 @@ fn resolve_targets(
                     name: target.name.clone(),
                     x: target.x,
                     y: target.y,
-                    orig_x: target.orig_x,
-                    orig_y: target.orig_y,
                 });
             }
             None => missing.push(target.name.clone()),
@@ -1376,16 +1523,11 @@ fn resolve_targets(
 }
 
 struct ResolvedTarget {
-    /// 解析时的条目索引。生产路径已改为按名重定位（写入时索引可能已漂移），
-    /// 此字段仅用于测试断言「同名取最近」的配对结果。
-    #[cfg_attr(not(test), allow(dead_code))]
+    /// 开局配对出的唯一条目索引；写入时优先用它，避免同名图标互相顶替。
     index: usize,
     name: String,
     x: i32,
     y: i32,
-    /// 图标原始位置，写入时据此在同名项里消歧。
-    orig_x: i32,
-    orig_y: i32,
 }
 
 #[cfg(test)]
@@ -1444,6 +1586,68 @@ mod tests {
         assert_eq!(resolved.len(), 1);
         assert_eq!(resolved[0].index, 1);
         assert_eq!((resolved[0].x, resolved[0].y), (100, 10));
+    }
+
+    #[test]
+    fn locate_item_prefers_resolved_index_for_duplicate_names() {
+        let items = vec![item("A", 10, 10), item("A", 500, 500)];
+        assert_eq!(locate_item(&items, 1, "A"), Some(1));
+        assert_eq!(locate_item(&items, 0, "A"), Some(0));
+    }
+
+    #[test]
+    fn locate_item_falls_back_to_unique_name_after_index_drift() {
+        let items = vec![item("B", 10, 10), item("A", 500, 500)];
+        assert_eq!(locate_item(&items, 0, "A"), Some(1));
+    }
+
+    #[test]
+    fn locate_item_rejects_ambiguous_duplicates() {
+        let items = vec![item("B", 10, 10), item("A", 100, 100), item("A", 500, 500)];
+        assert_eq!(locate_item(&items, 0, "A"), None);
+    }
+
+    #[test]
+    fn offscreen_targets_rejects_monitor_topology_changes() {
+        let positions = vec![target("inside", 100, 100), target("outside", 3000, 100)];
+        let offscreen = offscreen_targets(
+            &positions,
+            (76, 100),
+            RectI {
+                x: 0,
+                y: 0,
+                w: 1920,
+                h: 1080,
+            },
+        );
+        assert_eq!(offscreen, vec!["outside".to_string()]);
+    }
+
+    #[test]
+    fn items_in_monitors_keeps_original_indices() {
+        let monitors = [MonitorInfo {
+            index: 0,
+            name: "test".into(),
+            x: 0,
+            y: 0,
+            width: 1920,
+            height: 1080,
+            scale: 1.0,
+            primary: true,
+        }];
+        let items = vec![
+            item("onscreen-a", 10, 10),
+            item("offscreen", 2000, 10),
+            item("onscreen-b", 200, 10),
+        ];
+        let (sources, kept) = items_in_monitors(items, (76, 100), &monitors);
+        assert_eq!(sources, vec![0, 2]);
+        assert_eq!(
+            kept.iter()
+                .map(|item| item.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["onscreen-a", "onscreen-b"]
+        );
     }
 
     #[test]

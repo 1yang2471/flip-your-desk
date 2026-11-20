@@ -17,11 +17,10 @@ pub struct Captured {
     pub label_font: LabelFont,
 }
 
-/// 写回结果：moved 为成功写回的图标数，skipped_missing 为桌面已找不到的目标名
-/// （玩到一半被删/改名），failed_write 为写入被拒的名字。
+/// 写回结果：moved 为成功写回的图标数，failed_write 为写入被拒的名字。
+/// 目标缺失/屏外属于写前预检错误，整批不动，不会出现在这个报告里。
 pub struct ApplyReport {
     pub moved: usize,
-    pub skipped_missing: Vec<String>,
     pub failed_write: Vec<String>,
 }
 

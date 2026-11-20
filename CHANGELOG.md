@@ -2,6 +2,22 @@
 
 All notable changes to this project are documented here.
 
+## Unreleased
+
+- Fixed the timed-challenge clock: all monitors now share the backend `startedAtMs` anchor, and a replay resets the countdown instead of starting already expired.
+- Fixed an armed drag that ended on its original slot or empty space still firing a click, which could select a card or silently swap two cards.
+- Fixed drag listener cleanup (`pointercancel` was unbound with the wrong handler), exit-failure cards staying flipped away, and selection surviving into the result screen.
+- Fixed the launcher mute preference only persisting once a round started, and a failed environment probe still showing "Ready" with an enabled Start button.
+- Fixed HUD drift after deselecting a card, 44px hit areas overlapping adjacent header/HUD buttons, and result text actions sitting off-center.
+- Enforced the 12px type floor, raised the how-to step numbers to a passing contrast, and removed the always-on `will-change` from every card.
+- Save path: duplicate-name items are verified by their resolved item index instead of "any icon with this name landed"; a missing/renamed icon or an off-screen target now aborts the whole write before anything moves.
+- Save path: the blocked `writing` flag is released on worker panic/cancel, and restore/quit share the same check-and-set lock so two monitors cannot write concurrently.
+- Crash recovery: the icons-hidden marker is written before capture and cleared only after a successful restore; startup/probe/exit all retry a failed restore instead of forgetting it.
+- Desktop reads now reject failed `LVM_GETITEMPOSITION` results and item-count changes during a scan.
+- Capture progress is emitted as each parallel chunk finishes instead of only at 100%; label rectangles use the pre-filter listview index.
+- Removed the unused JPEG decoder from the `image` dependency and aligned CI clippy with the local `--all-targets` gate.
+- Added regression tests for the timed clock, drag/click suppression, pointercancel unbinding, save-path helpers, type floor, version consistency, issue i18n parity, and the new UI spacing/contrast rules.
+
 ## 0.3.0
 
 - **Desktop presence layer (purely visual, no backend changes).**

@@ -18,7 +18,8 @@ export function storedMuted(): boolean {
   }
 }
 
-function storeMuted(muted: boolean): void {
+/** 启动窗与覆盖层共用：任何一窗切换静音都立即落盘，避免关窗后偏好丢失。 */
+export function storeMuted(muted: boolean): void {
   try {
     localStorage.setItem(MUTE_KEY, muted ? "1" : "0");
   } catch {
@@ -33,6 +34,8 @@ export class Sounds {
   private lastPlayed = new Map<string, number>();
 
   setMuted(muted: boolean): void {
+    // 每次 state-changed 都会同步静音态；没变化时不要反复写 localStorage/推增益。
+    if (this.muted === muted) return;
     this.muted = muted;
     storeMuted(muted);
     // 立即静音：已 start() 但还在排期中的振荡器也要一起停。
