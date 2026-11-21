@@ -173,6 +173,11 @@ impl Round {
         if !self.timed {
             return Err(AppError::new("not_timed"));
         }
+        // 记忆阶段期间锚点在未来；前端 TimedClock 会钳住倒计时，但后端也
+        // 不接受“还没开始计时就超时”的调用。
+        if self.started_at_ms > now_ms() {
+            return Err(AppError::new("round_not_started"));
+        }
         if self.result.is_some() {
             return self
                 .result

@@ -42,6 +42,26 @@ fn finish_before_all_drawn_is_rejected() {
 }
 
 #[test]
+fn finish_during_study_does_not_count_study_time() {
+    let mut round = test_round();
+    round.placements = (0..round.total()).map(|i| Some(i as u32)).collect();
+    round.pool.clear();
+    let result = round.finish().unwrap();
+    assert_eq!(result.elapsed_ms, 0, "记忆阶段不能计入用时");
+}
+
+#[test]
+fn timeout_during_study_is_rejected() {
+    let snapshot = mock_snapshot(&test_monitors());
+    let mut round = Round::new(snapshot, "zh-CN".into(), true, true, true);
+    round.begin();
+    assert_eq!(
+        round.finish_timed_out().unwrap_err().code,
+        "round_not_started"
+    );
+}
+
+#[test]
 fn time_limit_formula_centered() {
     assert_eq!(time_limit_ms(24), 150_000);
     assert_eq!(time_limit_ms(1), 35_000);
@@ -77,10 +97,35 @@ fn skip_study_before_begin_is_rejected() {
 }
 
 #[test]
+fn begin_schedules_a_full_study_window() {
+    let snapshot = mock_snapshot(&test_monitors());
+    let mut round = Round::new(snapshot, "zh-CN".into(), true, true, false);
+    let before = now_ms();
+    round.begin();
+    let after = now_ms();
+    let study = study_duration_ms(round.total());
+    assert!(round.started_at_ms >= before + study);
+    assert!(round.started_at_ms <= after + study);
+}
+
+#[test]
+fn skip_study_is_idempotent() {
+    let mut round = test_round();
+    round.skip_study().unwrap();
+    let first = round.started_at_ms;
+    // 隔 2ms 再跳一次：若实现无条件覆盖，新 target 会比 first 晚。
+    std::thread::sleep(std::time::Duration::from_millis(2));
+    round.skip_study().unwrap();
+    assert_eq!(round.started_at_ms, first, "第二次跳过不能改变已提前的起点");
+}
+
+#[test]
 fn timeout_finish_scores_placed_only_and_marks_timeout() {
     let snapshot = mock_snapshot(&test_monitors());
     let mut round = Round::new(snapshot, "zh-CN".into(), true, true, true);
     round.begin();
+    // 模拟限时真正耗尽：把正式起点拨到过去，否则会被“未开始计时”拒绝。
+    round.started_at_ms = now_ms() - 1_000;
     round.draw(0).unwrap();
     round.placements[0] = Some(0);
     // 池未清空、槽位未填满——超时结算绕过两个拒绝条件，只计已放好的。
@@ -137,12 +182,16 @@ fn replay_clears_state() {
     round.placements = (0..round.total()).map(|i| Some(i as u32)).collect();
     round.pool.clear();
     round.finish().unwrap();
+    let before = now_ms();
     round.replay().unwrap();
+    let after = now_ms();
     assert!(round.placements.iter().all(|slot| slot.is_none()));
     assert_eq!(round.pool.len(), round.total());
     assert_eq!(round.moves, 0);
     assert!(round.result.is_none());
-    assert!(round.started_at_ms > 0);
+    let study = study_duration_ms(round.total());
+    assert!(round.started_at_ms >= before + study);
+    assert!(round.started_at_ms <= after + study);
 }
 
 #[test]

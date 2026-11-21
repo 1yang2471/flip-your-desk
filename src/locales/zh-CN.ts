@@ -131,6 +131,7 @@ export const zhCN = {
   "error.desktop_labels_unavailable": "桌面图标名称暂时读取不到，请稍后重试保存。",
   "error.backup_failed": "无法写入布局备份，为避免丢布局已取消保存。",
   "error.round_not_finished": "请先完成本局。",
+  "error.round_not_started": "本局还没正式开始计时。",
   "error.no_round": "本局尚未开始。",
   "error.round_in_progress": "本局已在进行中。",
   "error.unknown_monitor": "显示器信息已变化。",

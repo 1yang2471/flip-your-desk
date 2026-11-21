@@ -610,13 +610,20 @@ export class OverlayGame {
       this.endStudy();
       return;
     }
-    const tick = studyTick(this.state.startedAtMs, this.state.studyMs);
+    const tick = studyTick(
+      this.state.startedAtMs,
+      this.state.studyMs,
+      this.state.flipMs,
+    );
     if (!tick.done) {
+      // 退出演出期间不要往动画上重铺预览；取消时 cancelExit 会再同步一次。
+      if (this.pending) return;
       if (!this.studyActive) {
         this.startStudy();
       } else if (this.studyAnchor !== this.state.startedAtMs) {
-        // 跳过只把同一阶段提前：换锚点继续，不重放预览。
+        // 跳过只把同一阶段提前：换锚点并重新排期，不重放预览。
         this.studyAnchor = this.state.startedAtMs;
+        this.scheduleStudy();
       }
       return;
     }
@@ -653,13 +660,40 @@ export class OverlayGame {
     this.studySkipPending = false;
     this.studyShownSeconds = -1;
     this.updateStudy();
+    this.scheduleStudy();
     this.studyTimer = window.setInterval(() => this.updateStudy(), 100);
     this.placeFloating();
   }
 
+  /** 起翻由正式锚点反推的一次性定时器排期；跳过换锚点后重新调用。 */
+  private scheduleStudy(): void {
+    if (!this.studyActive || this.studyFlipping) return;
+    if (this.studyFlipTimer !== null) {
+      window.clearTimeout(this.studyFlipTimer);
+      this.studyFlipTimer = null;
+    }
+    const tick = studyTick(
+      this.state.startedAtMs,
+      this.state.studyMs,
+      this.state.flipMs,
+    );
+    if (tick.done) {
+      this.endStudy();
+      return;
+    }
+    this.studyFlipTimer = window.setTimeout(
+      () => this.beginFlipDown(),
+      tick.flipDelayMs,
+    );
+  }
+
   private updateStudy(): void {
     if (!this.studyActive || this.studyFlipping) return;
-    const tick = studyTick(this.state.startedAtMs, this.state.studyMs);
+    const tick = studyTick(
+      this.state.startedAtMs,
+      this.state.studyMs,
+      this.state.flipMs,
+    );
     this.studyRingFill.style.strokeDashoffset = String(1 - tick.fraction);
     if (tick.seconds !== this.studyShownSeconds) {
       this.studyShownSeconds = tick.seconds;
@@ -672,8 +706,13 @@ export class OverlayGame {
       );
       this.studyChip.title = t(this.lang, "overlay.studySkip");
     }
-    // 翻下与正式起点对齐：起点前 flipMs 起翻，卡面落定即开始计时。
-    if (tick.remainingMs <= this.state.flipMs) this.beginFlipDown();
+    if (tick.done) {
+      // 定时器被系统节流或丢失时的兜底；正常路径由 settle 定时器收尾。
+      this.endStudy();
+      return;
+    }
+    // 一次性排期若被延迟到翻下窗口内，心跳补一次起翻。
+    if (tick.flipDelayMs === 0) this.beginFlipDown();
   }
 
   private beginFlipDown(): void {
@@ -683,13 +722,24 @@ export class OverlayGame {
       window.clearInterval(this.studyTimer);
       this.studyTimer = null;
     }
+    if (this.studyFlipTimer !== null) {
+      window.clearTimeout(this.studyFlipTimer);
+      this.studyFlipTimer = null;
+    }
     this.studyChip.disabled = true;
     for (const preview of this.previews) preview.classList.add("is-flipping");
     if (this.view.isPrimary) this.sounds.flip();
-    // 收尾对齐正式起点，而不是固定等 flipMs：100ms 心跳的相位差不能让
-    // 玩家在计时已开始后还多等最多一拍。
-    const wait = Math.max(0, this.state.startedAtMs - Date.now()) + 40;
-    this.studyFlipTimer = window.setTimeout(() => this.endStudy(), wait);
+    // 预览必须在正式起点移除；如果起翻被延迟，宁可在锚点切掉最后一小段
+    // 过渡，也不把布局多亮给玩家。
+    const tick = studyTick(
+      this.state.startedAtMs,
+      this.state.studyMs,
+      this.state.flipMs,
+    );
+    this.studyFlipTimer = window.setTimeout(
+      () => this.endStudy(),
+      Math.max(0, tick.settleDelayMs),
+    );
   }
 
   /** 收尾：移除预览、解锁牌桌、收掉圆环。可重入。 */

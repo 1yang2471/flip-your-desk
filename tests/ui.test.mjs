@@ -242,7 +242,8 @@ test("致命弹窗居中、有遮罩、且文案走本地化（非硬编码英�
 
 test("每个后端错误码在两种语言里都有文案", () => {
   const rust = readFileSync(join(ROOT, "src-tauri/src/platform/windows.rs"), "utf8")
-    + readFileSync(join(ROOT, "src-tauri/src/lib.rs"), "utf8");
+    + readFileSync(join(ROOT, "src-tauri/src/lib.rs"), "utf8")
+    + readFileSync(join(ROOT, "src-tauri/src/game.rs"), "utf8");
   const codes = new Set(
     [...rust.matchAll(/AppError::(?:new|with_detail)\(\s*"([a-z_]+)"/g)].map((m) => m[1]),
   );
@@ -1026,23 +1027,26 @@ test("每个启动器问题码都有双语标题与提示", () => {
 
 // ------------------------------------------------------- 记忆阶段（study）
 
-test("studyTick：整段 / 中途 / 晚加载共用同一锚点", async () => {
+test("studyTick：整段 / 中途 / 翻下窗口 / 晚加载共用同一锚点", async () => {
   const out = await tsBehaviorTest("src/study.ts", `
-    const full = studyTick(13000, 3000, 10000);
-    const mid = studyTick(13000, 3000, 11500);
-    const edge = studyTick(13000, 3000, 13000);
-    const late = studyTick(13000, 3000, 13500);
+    const full = studyTick(13000, 3000, 320, 10000);
+    const mid = studyTick(13000, 3000, 320, 11500);
+    const near = studyTick(13000, 3000, 320, 12700);
+    const edge = studyTick(13000, 3000, 320, 13000);
+    const late = studyTick(13000, 3000, 320, 13500);
     return {
-      full: [full.remainingMs, full.fraction, full.seconds, full.done],
-      mid: [mid.remainingMs, mid.fraction, mid.seconds, mid.done],
-      edge: [edge.remainingMs, edge.fraction, edge.seconds, edge.done],
-      late: [late.remainingMs, late.fraction, late.seconds, late.done],
+      full: [full.remainingMs, full.fraction, full.seconds, full.done, full.flipDelayMs, full.settleDelayMs],
+      mid: [mid.remainingMs, mid.fraction, mid.seconds, mid.done, mid.flipDelayMs, mid.settleDelayMs],
+      near: [near.remainingMs, near.fraction, near.seconds, near.done, near.flipDelayMs, near.settleDelayMs],
+      edge: [edge.remainingMs, edge.fraction, edge.seconds, edge.done, edge.flipDelayMs, edge.settleDelayMs],
+      late: [late.remainingMs, late.fraction, late.seconds, late.done, late.flipDelayMs, late.settleDelayMs],
     };
   `);
-  assert.deepEqual(out.full, [3000, 1, 3, false], "开局圆环满格、显示整段秒数");
-  assert.deepEqual(out.mid, [1500, 0.5, 2, false], "中途按剩余比例收缩");
-  assert.deepEqual(out.edge, [0, 0, 0, true], "到点即结束");
-  assert.deepEqual(out.late, [0, 0, 0, true], "晚加载窗口不补演负数");
+  assert.deepEqual(out.full, [3000, 1, 3, false, 2680, 3000], "开局：2.68s 后起翻、3s 时收尾");
+  assert.deepEqual(out.mid, [1500, 0.5, 2, false, 1180, 1500], "中途按剩余比例收缩");
+  assert.deepEqual(out.near, [300, 0.1, 1, false, 0, 300], "进入 320ms 窗口立即起翻，锚点收尾");
+  assert.deepEqual(out.edge, [0, 0, 0, true, 0, 0], "到点即结束");
+  assert.deepEqual(out.late, [0, 0, 0, true, 0, 0], "晚加载窗口不补演负数");
 });
 
 test("记忆阶段样式：预览不可点、圆环收缩、翻下转走", async () => {
@@ -1088,7 +1092,14 @@ test("记忆阶段：真实布局预览 + 输入锁 + 跳过与收尾都可达",
   assert.match(f, /studyTick\(/, "圆环由纯函数驱动");
   assert.match(f, /this\.icons\.get\(slot\.id\)/, "槽位 id 即原始图标 id，预览即真实布局");
   assert.match(f, /this\.board\.inert = true/, "记忆阶段锁住整块牌桌");
-  assert.match(f, /tick\.remainingMs <= this\.state\.flipMs/, "正式起点前 flipMs 开始翻下");
+  assert.match(f, /this\.scheduleStudy\(\)/, "起翻按锚点一次性排期");
+  assert.match(f, /tick\.flipDelayMs/, "起翻延迟由纯函数给出");
+  assert.match(f, /tick\.settleDelayMs/, "收尾按正式起点");
+  assert.doesNotMatch(
+    methodBody(f, "private beginFlipDown"),
+    /\+\s*40/,
+    "不得再给收尾加固定 40ms 余量",
+  );
   assert.match(f, /api\.skipStudy\(\)/, "跳过走独立命令");
   for (const [name, slice] of [
     ["runExit", f.slice(f.indexOf("private runExit("), f.indexOf("private cancelExit"))],

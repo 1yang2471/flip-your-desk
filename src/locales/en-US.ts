@@ -133,6 +133,7 @@ export const enUS = {
   "error.desktop_labels_unavailable": "Desktop icon names can't be read right now; try saving again in a moment.",
   "error.backup_failed": "Could not write the layout backup, so saving was cancelled to avoid losing your layout.",
   "error.round_not_finished": "Finish the round first.",
+  "error.round_not_started": "The round has not started counting down yet.",
   "error.no_round": "This round has not started.",
   "error.round_in_progress": "A round is already in progress.",
   "error.unknown_monitor": "The display layout changed.",
