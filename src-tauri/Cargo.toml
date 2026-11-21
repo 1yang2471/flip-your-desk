@@ -1,6 +1,6 @@
 [package]
 name = "flip-your-desk"
-version = "0.3.0"
+version = "0.4.0"
 description = "Turn your desktop icons into a memory card game"
 authors = ["1yang2471"]
 license = "MIT"

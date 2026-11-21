@@ -2,7 +2,7 @@
 
 All notable changes to this project are documented here.
 
-## Unreleased
+## 0.4.0
 
 - Added a study phase before each round: the real layout is shown for 3–6 seconds with a shrinking gold ring and seconds above the HUD (click it to skip), then the cards flip down. The timer and the timed challenge start exactly when the table is face down (`game::FLIP_MS`), and the study phase never counts toward the score. Late-loading windows skip the preview instead of replaying it.
 - Fixed the timed-challenge clock: all monitors now share the backend `startedAtMs` anchor, and a replay resets the countdown instead of starting already expired.
