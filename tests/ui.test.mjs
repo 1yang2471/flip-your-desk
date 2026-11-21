@@ -38,7 +38,21 @@ function scene() {
     <span class="face-name" style="top:58px;left:24px;width:76px">此电脑</span>
   </span>
 </button>
-</div></div>
+<div class="card card-face card-preview" id="preview" style="width:76px;height:100px;transform:translate3d(0,120px,0)">
+  <span class="card-inner card-face-inner is-photo is-preview" id="previewInner">
+    <img class="face-image" src="data:image/png;base64,iVBORw0KGgo=" alt="">
+    <span class="face-name" style="top:58px;left:24px;width:76px">预览</span>
+  </span>
+</div>
+</div>
+<div class="hud-wrap" id="hudWrap" style="position:absolute;left:0;top:0">
+  <button class="study-chip" id="studyChip" type="button">
+    <svg class="study-ring" viewBox="0 0 20 20" aria-hidden="true"><circle class="study-ring-track" cx="10" cy="10" r="8"></circle><circle class="study-ring-fill" id="ringFill" cx="10" cy="10" r="8" pathLength="1" transform="rotate(-90 10 10)"></circle></svg>
+    <span class="study-seconds" id="studySeconds">记住 3s</span>
+  </button>
+  <div class="hud-row"><div class="hud"><span class="hud-value">00:00</span></div></div>
+</div>
+</div>
 <div class="modal" id="modalProbe" style="width:340px">
   <p class="modal-timed-out" id="timedOut">Out of time</p>
   <div class="modal-actions">
@@ -259,7 +273,7 @@ test("翻牌音与画面同帧：不能在 drawCard 的 .then() 里晚于 state-
 
 test("小按钮的命中区不小于 44×44（用伪元素扩大，视觉尺寸不变）", () => {
   const css = readFileSync(join(ROOT, "src/styles.css"), "utf8");
-  for (const selector of [".icon-button", ".hud-button", ".confirm-button", ".secondary-button"]) {
+  for (const selector of [".icon-button", ".hud-button", ".confirm-button", ".secondary-button", ".study-chip"]) {
     assert.match(css, new RegExp(`${selector.replace(".", "\\.")}::before`), `${selector} 需要透明伪元素扩大命中区`);
   }
   assert.match(css, /width: 44px;\s*height: 44px;/, "命中区至少 44×44");
@@ -1008,6 +1022,96 @@ test("每个启动器问题码都有双语标题与提示", () => {
       !en.includes(`"issue.${code}.hint"`),
   );
   assert.deepEqual(missing, [], `缺少启动器问题文案: ${missing.join(", ")}`);
+});
+
+// ------------------------------------------------------- 记忆阶段（study）
+
+test("studyTick：整段 / 中途 / 晚加载共用同一锚点", async () => {
+  const out = await tsBehaviorTest("src/study.ts", `
+    const full = studyTick(13000, 3000, 10000);
+    const mid = studyTick(13000, 3000, 11500);
+    const edge = studyTick(13000, 3000, 13000);
+    const late = studyTick(13000, 3000, 13500);
+    return {
+      full: [full.remainingMs, full.fraction, full.seconds, full.done],
+      mid: [mid.remainingMs, mid.fraction, mid.seconds, mid.done],
+      edge: [edge.remainingMs, edge.fraction, edge.seconds, edge.done],
+      late: [late.remainingMs, late.fraction, late.seconds, late.done],
+    };
+  `);
+  assert.deepEqual(out.full, [3000, 1, 3, false], "开局圆环满格、显示整段秒数");
+  assert.deepEqual(out.mid, [1500, 0.5, 2, false], "中途按剩余比例收缩");
+  assert.deepEqual(out.edge, [0, 0, 0, true], "到点即结束");
+  assert.deepEqual(out.late, [0, 0, 0, true], "晚加载窗口不补演负数");
+});
+
+test("记忆阶段样式：预览不可点、圆环收缩、翻下转走", async () => {
+  const out = await fresh(`(async () => {
+    const chip = document.getElementById('studyChip');
+    const preview = document.getElementById('preview');
+    const inner = document.getElementById('previewInner');
+    const fill = document.getElementById('ringFill');
+    const hit = getComputedStyle(chip, '::before');
+    const before = {
+      peek: getComputedStyle(preview).pointerEvents,
+      transform: getComputedStyle(inner).transform,
+      anim: getComputedStyle(inner).animationName,
+    };
+    fill.style.strokeDashoffset = '1';
+    preview.classList.add('is-flipping');
+    await new Promise((r) => setTimeout(r, 450));
+    return {
+      ...before,
+      hit: [hit.width, hit.height],
+      stroke: getComputedStyle(fill).stroke,
+      dash: getComputedStyle(fill).strokeDasharray,
+      rotate: getComputedStyle(inner).rotate,
+      opacity: getComputedStyle(inner).opacity,
+    };
+  })()`);
+  assert.equal(out.peek, "none", "预览卡不吃指针事件");
+  assert.equal(out.anim, "none", "预览不播 card-flip-3d-in 入场翻转");
+  assert.match(
+    out.transform,
+    /^(none|matrix\(1, 0, 0, 1, 0, 0\)|matrix3d\(1, 0, 0, 0, 0, 1)/,
+    "预览直接正面朝上",
+  );
+  assert.deepEqual(out.hit, ["44px", "44px"], "跳过按钮有 44×44 命中区");
+  assert.match(out.stroke, /230, 180, 91/, "圆环用金色 accent");
+  assert.equal(out.dash, "1px", "pathLength=1 让 dashoffset 直接表示剩余比例");
+  assert.equal(out.rotate, "y -180deg", "翻下把卡面转走");
+  assert.equal(out.opacity, "0", "翻下后预览不再遮住卡背");
+});
+
+test("记忆阶段：真实布局预览 + 输入锁 + 跳过与收尾都可达", () => {
+  const f = readFileSync(join(ROOT, "src/overlay.ts"), "utf8");
+  assert.match(f, /studyTick\(/, "圆环由纯函数驱动");
+  assert.match(f, /this\.icons\.get\(slot\.id\)/, "槽位 id 即原始图标 id，预览即真实布局");
+  assert.match(f, /this\.board\.inert = true/, "记忆阶段锁住整块牌桌");
+  assert.match(f, /tick\.remainingMs <= this\.state\.flipMs/, "正式起点前 flipMs 开始翻下");
+  assert.match(f, /api\.skipStudy\(\)/, "跳过走独立命令");
+  for (const [name, slice] of [
+    ["runExit", f.slice(f.indexOf("private runExit("), f.indexOf("private cancelExit"))],
+    ["destroy", methodBody(f, "  destroy")],
+  ]) {
+    assert.match(slice, /this\.endStudy\(\)/, `${name} 必须收掉预览与定时器`);
+  }
+  const rust = readFileSync(join(ROOT, "src-tauri/src/game.rs"), "utf8");
+  assert.match(rust, /pub const FLIP_MS: u64 = 320/, "翻下过渡由后端定义");
+  assert.match(rust, /flip_ms: FLIP_MS/, "翻下时长随状态下发");
+  const model = readFileSync(join(ROOT, "src-tauri/src/model.rs"), "utf8");
+  assert.match(model, /pub flip_ms: u64/);
+  const types = readFileSync(join(ROOT, "src/types.ts"), "utf8");
+  assert.match(types, /flipMs: number/);
+});
+
+test("记忆阶段文案中英齐备", () => {
+  const zh = readFileSync(join(ROOT, "src/locales/zh-CN.ts"), "utf8");
+  const en = readFileSync(join(ROOT, "src/locales/en-US.ts"), "utf8");
+  for (const key of ["overlay.study", "overlay.studySkip", "overlay.studyAria"]) {
+    assert.ok(zh.includes(`"${key}"`), `中文缺 ${key}`);
+    assert.ok(en.includes(`"${key}"`), `英文缺 ${key}`);
+  }
 });
 
 let failed = 0;

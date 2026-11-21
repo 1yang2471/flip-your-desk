@@ -533,14 +533,16 @@ button {
 .icon-button,
 .hud-button,
 .confirm-button,
-.secondary-button {
+.secondary-button,
+.study-chip {
   position: relative;
 }
 
 .icon-button::before,
 .hud-button::before,
 .confirm-button::before,
-.secondary-button::before {
+.secondary-button::before,
+.study-chip::before {
   content: "";
   position: absolute;
   left: 50%;
@@ -743,6 +745,25 @@ button {
     transform: rotateY(0deg) scale(1);
     opacity: 1;
   }
+}
+
+/* 记忆阶段：真实布局预览只负责“看”，不接任何指针事件。 */
+.card-preview {
+  pointer-events: none;
+}
+
+/* 预览直接正面朝上：跳过 card-face-inner 的 180° 入场翻转。 */
+.card-preview .card-face-inner.is-preview {
+  animation: none;
+  transform: rotateY(0deg);
+  transition: rotate var(--flip-ms, 320ms) var(--ease),
+    opacity var(--flip-ms, 320ms) var(--ease);
+}
+
+/* 翻下与后端给出的正式起点对齐；翻完由 JS 移除预览，露出下面的卡背。 */
+.card-preview.is-flipping .card-face-inner {
+  rotate: y -180deg;
+  opacity: 0;
 }
 
 .card[data-tone="light"] .card-back-inner {
@@ -951,6 +972,58 @@ button {
     opacity: 1;
     transform: none;
   }
+}
+
+/* 记忆阶段圆环 chip：HUD 上方的临时计时器，点一下跳过。金色细描边
+   与主行动同色，但只用 outline 级别的视觉重量，不抢 HUD。 */
+.study-chip {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0 auto 10px;
+  padding: 4px 10px 4px 6px;
+  border: 1px solid rgba(238, 192, 108, 0.42);
+  border-radius: 999px;
+  background: rgba(16, 18, 22, 0.88);
+  color: var(--accent);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  animation: chip-pop 220ms var(--ease);
+  transition: background-color 140ms var(--ease), border-color 140ms var(--ease);
+}
+
+.study-chip:hover {
+  border-color: var(--accent);
+  background: rgba(238, 192, 108, 0.12);
+}
+
+.study-chip:disabled {
+  cursor: default;
+  opacity: 0.75;
+}
+
+.study-ring {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  pointer-events: none;
+}
+
+.study-ring-track {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.16);
+  stroke-width: 2;
+}
+
+.study-ring-fill {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2;
+  stroke-linecap: round;
+  /* pathLength=1：dashoffset 0→1 就是剩余比例 1→0。 */
+  stroke-dasharray: 1;
+  transition: stroke-dashoffset 120ms linear;
 }
 
 .hud-wrap {

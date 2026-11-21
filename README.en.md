@@ -31,8 +31,9 @@ The installed program `flip-your-desk.exe` requires the Microsoft Edge WebView2 
 ## How to play
 
 1. Open the app and check that the environment panel says Ready
-2. Hit Start; the desktop is covered and every icon becomes a `?`
+2. Hit Start; the real layout is shown for 3–6 seconds (a shrinking gold ring sits above the HUD; click it to skip), then every icon becomes a `?`
    - Or hit **Timed challenge**: the limit scales with icon count (30s + 5s per icon — 24 icons = 2:30), the HUD counts down, and the round settles automatically when time runs out
+   - Time and the timed challenge start only after the cards flip down; the study phase never counts toward your score
 3. Click a slot to draw an icon, drag icons to where you remember them
 4. Once every card is drawn, hit Confirm
 5. Pick Play again, Save new layout or Restore original

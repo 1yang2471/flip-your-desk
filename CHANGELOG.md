@@ -4,6 +4,7 @@ All notable changes to this project are documented here.
 
 ## Unreleased
 
+- Added a study phase before each round: the real layout is shown for 3–6 seconds with a shrinking gold ring and seconds above the HUD (click it to skip), then the cards flip down. The timer and the timed challenge start exactly when the table is face down (`game::FLIP_MS`), and the study phase never counts toward the score. Late-loading windows skip the preview instead of replaying it.
 - Fixed the timed-challenge clock: all monitors now share the backend `startedAtMs` anchor, and a replay resets the countdown instead of starting already expired.
 - Fixed an armed drag that ended on its original slot or empty space still firing a click, which could select a card or silently swap two cards.
 - Fixed drag listener cleanup (`pointercancel` was unbound with the wrong handler), exit-failure cards staying flipped away, and selection surviving into the result screen.
@@ -16,7 +17,7 @@ All notable changes to this project are documented here.
 - Desktop reads now reject failed `LVM_GETITEMPOSITION` results and item-count changes during a scan.
 - Capture progress is emitted as each parallel chunk finishes instead of only at 100%; label rectangles use the pre-filter listview index.
 - Removed the unused JPEG decoder from the `image` dependency and aligned CI clippy with the local `--all-targets` gate.
-- Added regression tests for the timed clock, drag/click suppression, pointercancel unbinding, save-path helpers, type floor, version consistency, issue i18n parity, and the new UI spacing/contrast rules.
+- Added regression tests for the study countdown, timed clock, drag/click suppression, pointercancel unbinding, save-path helpers, type floor, version consistency, issue i18n parity, and the new UI spacing/contrast rules.
 
 ## 0.3.0
 

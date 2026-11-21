@@ -154,6 +154,10 @@ pub struct PublicState {
     pub remaining: usize,
     pub moves: u32,
     pub started_at_ms: u64,
+    /// 开局记忆阶段时长（毫秒）；前端用它画收缩圆环。
+    pub study_ms: u64,
+    /// 卡面翻下的过渡时长（毫秒）；正式计时从翻下结束开始。
+    pub flip_ms: u64,
     /// 限时值（毫秒）；0 = 未限时。前端倒计时与超时触发都以此为准。
     pub limit_ms: u64,
     pub finished: bool,

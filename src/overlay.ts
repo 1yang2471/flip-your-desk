@@ -5,6 +5,7 @@ import { Sounds } from "./audio";
 import { ExitChoreography } from "./choreography";
 import { clear, h, iconEl } from "./dom";
 import { PresenceController } from "./presence";
+import { studyTick } from "./study";
 import { TimedClock } from "./timed";
 import {
   detectLang,
@@ -59,6 +60,9 @@ export class OverlayGame {
   private hudMoves!: HTMLSpanElement;
   private hudHint!: HTMLDivElement;
   private confirmButton!: HTMLButtonElement;
+  private studyChip!: HTMLButtonElement;
+  private studyRingFill!: SVGCircleElement;
+  private studySeconds!: HTMLSpanElement;
   private resultLayer!: HTMLDivElement;
   private exitLayer!: HTMLDivElement;
   private toastElement!: HTMLDivElement;
@@ -85,6 +89,15 @@ export class OverlayGame {
   private choreography: ExitChoreography | null = null;
   private readonly clock = new TimedClock();
   private readonly reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+  /** 记忆阶段：预览卡、圆环驱动与 board 输入锁。 */
+  private studyActive = false;
+  private studyFlipping = false;
+  private studyAnchor = 0;
+  private studySkipPending = false;
+  private studyShownSeconds = -1;
+  private studyTimer: number | null = null;
+  private studyFlipTimer: number | null = null;
+  private previews: HTMLElement[] = [];
 
   constructor(view: OverlayView, root: HTMLElement) {
     this.view = view;
@@ -101,7 +114,9 @@ export class OverlayGame {
     this.buildHud();
     this.buildBoard();
     this.applyState(this.state, true);
-    this.bindEvents();
+    // 必须先完成事件订阅再报告 ready：最后一个窗口触发 begin() 并广播
+    // 记忆阶段状态，订阅晚一拍就会整段错过、直接以可玩状态开局。
+    await this.bindEvents();
     this.bindPresence();
     window.addEventListener("beforeunload", () => this.destroy());
   }
@@ -199,6 +214,15 @@ export class OverlayGame {
     exit.addEventListener("click", () => this.showExitConfirm());
     hud.appendChild(exit);
 
+    this.studyChip = h("button", "study-chip");
+    this.studyChip.type = "button";
+    this.studyChip.hidden = true;
+    this.studyChip.appendChild(this.buildStudyRing());
+    this.studySeconds = h("span", "study-seconds");
+    this.studyChip.appendChild(this.studySeconds);
+    this.studyChip.addEventListener("click", () => this.skipStudy());
+    this.hudWrap.appendChild(this.studyChip);
+
     const row = h("div", "hud-row");
     row.appendChild(hud);
     this.hudWrap.appendChild(row);
@@ -236,6 +260,31 @@ export class OverlayGame {
     row.appendChild(this.confirmButton);
   }
 
+  /** 倒计时圆环：pathLength=1 让 dashoffset 直接等于“剩余比例”的补数。 */
+  private buildStudyRing(): SVGSVGElement {
+    const ns = "http://www.w3.org/2000/svg";
+    const svg = document.createElementNS(ns, "svg");
+    svg.setAttribute("class", "study-ring");
+    svg.setAttribute("viewBox", "0 0 20 20");
+    svg.setAttribute("aria-hidden", "true");
+    const track = document.createElementNS(ns, "circle");
+    const fill = document.createElementNS(ns, "circle");
+    for (const circle of [track, fill]) {
+      circle.setAttribute("cx", "10");
+      circle.setAttribute("cy", "10");
+      circle.setAttribute("r", "8");
+    }
+    track.setAttribute("class", "study-ring-track");
+    fill.setAttribute("class", "study-ring-fill");
+    fill.setAttribute("pathLength", "1");
+    // 从 12 点方向顺时针收缩；用属性旋转，避免和 CSS transition 抢 transform。
+    fill.setAttribute("transform", "rotate(-90 10 10)");
+    this.studyRingFill = fill;
+    svg.appendChild(track);
+    svg.appendChild(fill);
+    return svg;
+  }
+
   private buildBoard(): void {
     // 发牌级联：按 y→x 排序逐卡延迟入场，像发牌员摆牌；只作用于首建路径。
     // 游戏中途 applyState 调 ensureBack（重新盖回）时不带延迟——那是普通事件，
@@ -271,12 +320,15 @@ export class OverlayGame {
   private unlisteners: Array<() => void> = [];
   private readonly onKeyDownBound = (event: KeyboardEvent) => this.onKeyDown(event);
 
-  private bindEvents(): void {
-    void listen<PublicState>("state-changed", (event) => {
-      this.applyState(event.payload, false);
-    })
-      .then((unlisten) => this.unlisteners.push(unlisten))
-      .catch((error: unknown) => console.error("state listener failed", error));
+  private async bindEvents(): Promise<void> {
+    try {
+      const unlisten = await listen<PublicState>("state-changed", (event) => {
+        this.applyState(event.payload, false);
+      });
+      this.unlisteners.push(unlisten);
+    } catch (error) {
+      console.error("state listener failed", error);
+    }
     // drag-hover 由本窗口本地 applyHover 已足够；后端广播在多显示器下会与
     // 本地状态交错，这里不再订阅，避免 outline 闪烁。
     document.addEventListener("keydown", this.onKeyDownBound);
@@ -308,6 +360,8 @@ export class OverlayGame {
   /** 按 y/x 排序取牌桌全部卡片（结算时多数槽位已是正面，不能只取 backs），
    *  交给编排器演多米诺；动画期间不发任何游戏命令。 */
   private runExit(then: () => void): void {
+    // 记忆阶段的预览卡不属于正式牌桌：先收掉，否则会混进退出演出。
+    this.endStudy();
     // 退出演出开始前收掉选中金框与提示：正面卡等下会翻走，
     // 留在 .card 上的选中框会变成一圈没有内容的空框。
     this.clearSelection();
@@ -327,10 +381,14 @@ export class OverlayGame {
     this.choreography?.cancel();
     this.choreography = null;
     this.pending = false;
+    // 退出演出已把记忆阶段预览收掉了；若正式起点还没到，恢复预览，
+    // 否则玩家会在“没看过布局”的情况下直接开局。
+    this.syncStudy();
   }
 
   /** 覆盖窗关闭/重建时释放定时器与事件监听，避免多局叠加。 */
   destroy(): void {
+    this.endStudy();
     if (this.clockTimer !== null) window.clearInterval(this.clockTimer);
     if (this.toastTimer !== null) window.clearTimeout(this.toastTimer);
     for (const timer of this.dealTimers) window.clearTimeout(timer);
@@ -409,6 +467,8 @@ export class OverlayGame {
     );
     this.state = state;
     this.sounds.setMuted(state.muted);
+    // 翻下时长由后端给出：预览卡的 CSS 过渡与本地收尾定时器读同一个值。
+    this.root.style.setProperty("--flip-ms", `${state.flipMs || 320}ms`);
     // 结算时收起还没落位的选中金框：弹窗后面留一圈空金边既误导也难看。
     if (state.finished) this.clearSelection();
 
@@ -459,6 +519,7 @@ export class OverlayGame {
       }
     }
 
+    this.syncStudy();
     this.updateHud();
     this.updateConfirmButton();
 
@@ -494,7 +555,7 @@ export class OverlayGame {
     const elapsed = this.state.finished && this.state.result
       ? this.state.result.elapsedMs
       : this.state.startedAtMs > 0
-        ? Date.now() - this.state.startedAtMs
+        ? Math.max(0, Date.now() - this.state.startedAtMs)
         : 0;
     // 限时模式：以所有窗口共享的后端 startedAtMs 为锚，多屏倒计时才不会
     // 各走各的；重开时后端刷新 startedAtMs，TimedClock 随之重置。
@@ -541,6 +602,135 @@ export class OverlayGame {
     if (appeared || disappeared) this.placeFloating();
   }
 
+  // ---------------------------------------------------------------- study
+
+  /** 后端把正式起点放在未来 = 记忆阶段；所有窗口按同一锚点算圆环。 */
+  private syncStudy(): void {
+    if (this.state.finished) {
+      this.endStudy();
+      return;
+    }
+    const tick = studyTick(this.state.startedAtMs, this.state.studyMs);
+    if (!tick.done) {
+      if (!this.studyActive) {
+        this.startStudy();
+      } else if (this.studyAnchor !== this.state.startedAtMs) {
+        // 跳过只把同一阶段提前：换锚点继续，不重放预览。
+        this.studyAnchor = this.state.startedAtMs;
+      }
+      return;
+    }
+    // 阶段已过：本窗加载晚了就不再补演；自然翻下则等过渡定时器收尾。
+    if (this.studyActive && !this.studyFlipping) this.endStudy();
+  }
+
+  private startStudy(): void {
+    this.endStudy();
+    this.studyActive = true;
+    this.studyAnchor = this.state.startedAtMs;
+    // 预览期间整块牌桌不可交互（含键盘焦点），HUD 与跳过按钮不受影响。
+    this.board.inert = true;
+    this.clearSelection();
+    this.hudHint.hidden = true;
+    for (const slot of this.view.slots) {
+      // 槽位 id 就是该位置原本的图标 id：预览即真实布局。
+      const icon = this.icons.get(slot.id);
+      if (!icon) continue;
+      const preview = h("div", "card card-face card-preview");
+      preview.setAttribute("aria-hidden", "true");
+      const inner = this.buildFaceInner(icon);
+      inner.classList.add("is-preview");
+      preview.appendChild(inner);
+      this.placeCard(preview, slot);
+      this.board.appendChild(preview);
+      this.previews.push(preview);
+    }
+    // 发牌级联被预览盖住，声音却还在响；记忆阶段开始时收掉这些 tick。
+    for (const timer of this.dealTimers) window.clearTimeout(timer);
+    this.dealTimers = [];
+    this.studyChip.hidden = false;
+    this.studyChip.disabled = false;
+    this.studySkipPending = false;
+    this.studyShownSeconds = -1;
+    this.updateStudy();
+    this.studyTimer = window.setInterval(() => this.updateStudy(), 100);
+    this.placeFloating();
+  }
+
+  private updateStudy(): void {
+    if (!this.studyActive || this.studyFlipping) return;
+    const tick = studyTick(this.state.startedAtMs, this.state.studyMs);
+    this.studyRingFill.style.strokeDashoffset = String(1 - tick.fraction);
+    if (tick.seconds !== this.studyShownSeconds) {
+      this.studyShownSeconds = tick.seconds;
+      this.studySeconds.textContent = t(this.lang, "overlay.study", {
+        seconds: tick.seconds,
+      });
+      this.studyChip.setAttribute(
+        "aria-label",
+        t(this.lang, "overlay.studyAria", { seconds: tick.seconds }),
+      );
+      this.studyChip.title = t(this.lang, "overlay.studySkip");
+    }
+    // 翻下与正式起点对齐：起点前 flipMs 起翻，卡面落定即开始计时。
+    if (tick.remainingMs <= this.state.flipMs) this.beginFlipDown();
+  }
+
+  private beginFlipDown(): void {
+    if (this.studyFlipping) return;
+    this.studyFlipping = true;
+    if (this.studyTimer !== null) {
+      window.clearInterval(this.studyTimer);
+      this.studyTimer = null;
+    }
+    this.studyChip.disabled = true;
+    for (const preview of this.previews) preview.classList.add("is-flipping");
+    if (this.view.isPrimary) this.sounds.flip();
+    // 收尾对齐正式起点，而不是固定等 flipMs：100ms 心跳的相位差不能让
+    // 玩家在计时已开始后还多等最多一拍。
+    const wait = Math.max(0, this.state.startedAtMs - Date.now()) + 40;
+    this.studyFlipTimer = window.setTimeout(() => this.endStudy(), wait);
+  }
+
+  /** 收尾：移除预览、解锁牌桌、收掉圆环。可重入。 */
+  private endStudy(): void {
+    if (this.studyTimer !== null) {
+      window.clearInterval(this.studyTimer);
+      this.studyTimer = null;
+    }
+    if (this.studyFlipTimer !== null) {
+      window.clearTimeout(this.studyFlipTimer);
+      this.studyFlipTimer = null;
+    }
+    for (const preview of this.previews) preview.remove();
+    this.previews = [];
+    this.studyActive = false;
+    this.studyFlipping = false;
+    this.studyAnchor = 0;
+    this.studySkipPending = false;
+    this.studyShownSeconds = -1;
+    this.board.inert = false;
+    if (this.studyChip) {
+      this.studyChip.hidden = true;
+      this.studyChip.disabled = false;
+    }
+    this.placeFloating();
+  }
+
+  private skipStudy(): void {
+    if (!this.studyActive || this.studyFlipping || this.studySkipPending) return;
+    this.studySkipPending = true;
+    this.studyChip.disabled = true;
+    void api.skipStudy().catch((error) => {
+      this.studySkipPending = false;
+      this.studyChip.disabled = false;
+      const payload = asAppError(error);
+      console.error("skip study failed", payload);
+      this.toast(errorText(this.lang, payload.code));
+      this.sounds.error();
+    });
+  }
+
   // ---------------------------------------------------------------- cards
 
   private ensureBack(slot: SlotView): void {
@@ -579,26 +769,7 @@ export class OverlayGame {
       element.type = "button";
       element.dataset.icon = String(icon.id);
       element.dataset.slot = String(slotId);
-      const inner = h("span", "card-inner card-face-inner");
-      if (icon.image) {
-        // 透明卡面：全格画布已把图标摆回格内原位，名字按桌面标签排版，
-        // 于是翻转后的样子与真实桌面 1:1（尺寸/颜色/位置/字体）。
-        inner.classList.add("is-photo");
-        const image = h("img", "face-image");
-        image.src = icon.image;
-        image.alt = "";
-        inner.appendChild(image);
-        inner.appendChild(this.buildFaceName(icon));
-      } else {
-        // 无图（演示模式或抠图失败）：退回实体卡面 + 字母占位。
-        const iconBox = h("span", "card-icon");
-        iconBox.appendChild(
-          h("span", "card-icon-letter", Array.from(icon.name || "?")[0] ?? "?"),
-        );
-        inner.appendChild(iconBox);
-        inner.appendChild(h("span", "card-name", icon.name));
-      }
-      element.appendChild(inner);
+      element.appendChild(this.buildFaceInner(icon));
       element.setAttribute("aria-label", t(this.lang, "overlay.cardFaceAria", { name: icon.name }));
       // 槽位必须每次从 dataset 现读：卡牌移动后被复用，闭包里的 slot 会过期。
       element.addEventListener("click", () => {
@@ -616,6 +787,30 @@ export class OverlayGame {
       element.dataset.slot = String(slotId);
     }
     this.placeCard(element, slot);
+  }
+
+  /** 正式卡面与记忆阶段预览共用同一套内容，保证预览与翻牌后 1:1。 */
+  private buildFaceInner(icon: IconView): HTMLElement {
+    const inner = h("span", "card-inner card-face-inner");
+    if (icon.image) {
+      // 透明卡面：全格画布已把图标摆回格内原位，名字按桌面标签排版，
+      // 于是翻转后的样子与真实桌面 1:1（尺寸/颜色/位置/字体）。
+      inner.classList.add("is-photo");
+      const image = h("img", "face-image");
+      image.src = icon.image;
+      image.alt = "";
+      inner.appendChild(image);
+      inner.appendChild(this.buildFaceName(icon));
+    } else {
+      // 无图（演示模式或抠图失败）：退回实体卡面 + 字母占位。
+      const iconBox = h("span", "card-icon");
+      iconBox.appendChild(
+        h("span", "card-icon-letter", Array.from(icon.name || "?")[0] ?? "?"),
+      );
+      inner.appendChild(iconBox);
+      inner.appendChild(h("span", "card-name", icon.name));
+    }
+    return inner;
   }
 
   private dropFace(iconId: number): void {

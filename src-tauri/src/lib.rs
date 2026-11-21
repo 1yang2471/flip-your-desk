@@ -650,6 +650,24 @@ fn replay_round(app: AppHandle, state: State<'_, AppState>) -> AppResult<()> {
 }
 
 #[tauri::command]
+fn skip_study(app: AppHandle, state: State<'_, AppState>) -> AppResult<()> {
+    let public = {
+        let mut inner = lock_state(&state);
+        if inner.writing {
+            return Err(AppError::new("write_in_progress"));
+        }
+        let round = inner
+            .round
+            .as_mut()
+            .ok_or_else(|| AppError::new("no_round"))?;
+        round.skip_study()?;
+        round.public_state()
+    };
+    emit_state(&app, &public);
+    Ok(())
+}
+
+#[tauri::command]
 fn set_muted(app: AppHandle, state: State<'_, AppState>, muted: bool) -> AppResult<()> {
     let public = {
         let mut inner = lock_state(&state);
@@ -894,6 +912,7 @@ pub fn run() {
             set_drag_hover,
             finish_round,
             replay_round,
+            skip_study,
             set_muted,
             save_and_exit,
             restore_and_exit,

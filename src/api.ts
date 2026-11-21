@@ -38,6 +38,7 @@ export const api = {
   finishRound: (timedOut = false) =>
     invoke<RoundResult>("finish_round", { timedOut }),
   replayRound: () => invoke<void>("replay_round"),
+  skipStudy: () => invoke<void>("skip_study"),
   setMuted: (muted: boolean) => invoke<void>("set_muted", { muted }),
   saveAndExit: () => invoke<void>("save_and_exit"),
   restoreAndExit: () => invoke<void>("restore_and_exit"),

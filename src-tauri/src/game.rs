@@ -1,4 +1,4 @@
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use rand::seq::SliceRandom;
 use rand::{thread_rng, Rng};
@@ -15,6 +15,16 @@ pub fn time_limit_ms(icon_count: usize) -> u64 {
     (30 + 5 * icon_count as u64) * 1000
 }
 
+/// 开局记忆阶段：2s + 0.12s/图标，夹在 3–6s。它不计入用时/限时，
+/// 玩家看一眼真实布局后卡面才翻下。
+pub fn study_duration_ms(icon_count: usize) -> u64 {
+    (2_000 + 120 * icon_count as u64).clamp(3_000, 6_000)
+}
+
+/// 记忆阶段结束到正式计时的过渡：卡面翻下的时长。跳过记忆阶段时正式
+/// 起点也推迟这段，保证所有窗口都是“卡面落定才开始计时”。
+pub const FLIP_MS: u64 = 320;
+
 #[derive(Debug, Clone)]
 pub struct Round {
     pub snapshot: Snapshot,
@@ -22,7 +32,7 @@ pub struct Round {
     pub placements: Vec<Option<u32>>,
     pub pool: Vec<u32>,
     pub moves: u32,
-    pub started: Option<Instant>,
+    /// 正式开始计时/限时的墙钟毫秒；记忆阶段期间是未来时刻。
     pub started_at_ms: u64,
     pub result: Option<RoundResult>,
     pub locale: String,
@@ -40,7 +50,6 @@ impl Round {
             placements: vec![None; snapshot.icons.len()],
             pool,
             moves: 0,
-            started: None,
             started_at_ms: 0,
             result: None,
             snapshot,
@@ -56,10 +65,25 @@ impl Round {
     }
 
     pub fn begin(&mut self) {
-        if self.started.is_none() {
-            self.started = Some(Instant::now());
-            self.started_at_ms = now_ms();
+        if self.started_at_ms == 0 {
+            self.started_at_ms = now_ms() + study_duration_ms(self.total());
         }
+    }
+
+    /// 用户点“跳过记忆阶段”：把正式起点提前到翻下过渡之后，计时/限时
+    /// 仍然从卡面落定开始（与自然到点的口径一致）。
+    pub fn skip_study(&mut self) -> AppResult<()> {
+        if self.result.is_some() {
+            return Err(AppError::new("round_finished"));
+        }
+        if self.started_at_ms == 0 {
+            return Err(AppError::new("no_round"));
+        }
+        let target = now_ms() + FLIP_MS;
+        if self.started_at_ms > target {
+            self.started_at_ms = target;
+        }
+        Ok(())
     }
 
     pub fn draw(&mut self, slot: u32) -> AppResult<()> {
@@ -125,10 +149,12 @@ impl Round {
         } else {
             ((correct as f64 / total as f64) * 100.0).round() as u32
         };
-        let elapsed_ms = self
-            .started
-            .map(|started| started.elapsed().as_millis() as u64)
-            .unwrap_or(0);
+        // 以正式起点（记忆阶段之后）为基准；记忆阶段不计入成绩。
+        let elapsed_ms = if self.started_at_ms > 0 {
+            now_ms().saturating_sub(self.started_at_ms)
+        } else {
+            0
+        };
         let result = RoundResult {
             correct,
             total,
@@ -186,8 +212,8 @@ impl Round {
         self.pool = pool;
         self.moves = 0;
         self.result = None;
-        self.started = Some(Instant::now());
-        self.started_at_ms = now_ms();
+        // 新一局同样有记忆阶段；计时/限时从阶段结束后开始。
+        self.started_at_ms = now_ms() + study_duration_ms(self.total());
         Ok(())
     }
 
@@ -197,6 +223,8 @@ impl Round {
             remaining: self.pool.len(),
             moves: self.moves,
             started_at_ms: self.started_at_ms,
+            study_ms: study_duration_ms(self.total()),
+            flip_ms: FLIP_MS,
             limit_ms: if self.timed {
                 time_limit_ms(self.total())
             } else {
@@ -390,167 +418,4 @@ pub fn mock_snapshot(monitors: &[MonitorInfo]) -> Snapshot {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn test_monitors() -> Vec<MonitorInfo> {
-        vec![MonitorInfo {
-            index: 0,
-            name: "test".into(),
-            x: 0,
-            y: 0,
-            width: 1920,
-            height: 1080,
-            scale: 1.0,
-            primary: true,
-        }]
-    }
-
-    fn test_round() -> Round {
-        let snapshot = mock_snapshot(&test_monitors());
-        let mut round = Round::new(snapshot, "zh-CN".into(), true, true, false);
-        round.begin();
-        round
-    }
-
-    #[test]
-    fn draw_fills_slots_and_empties_pool() {
-        let mut round = test_round();
-        let total = round.total();
-        for slot in 0..total {
-            round.draw(slot as u32).unwrap();
-        }
-        assert_eq!(round.pool.len(), 0);
-        assert!(round.placements.iter().all(|slot| slot.is_some()));
-        assert_eq!(round.moves, total as u32);
-        round.finish().unwrap();
-        assert!(round.result.is_some());
-    }
-
-    #[test]
-    fn finish_before_all_drawn_is_rejected() {
-        let mut round = test_round();
-        round.draw(0).unwrap();
-        assert_eq!(round.finish().unwrap_err().code, "not_all_drawn");
-    }
-
-    #[test]
-    fn time_limit_formula_centered() {
-        assert_eq!(time_limit_ms(24), 150_000);
-        assert_eq!(time_limit_ms(1), 35_000);
-        assert_eq!(time_limit_ms(120), 630_000);
-    }
-
-    #[test]
-    fn timeout_finish_scores_placed_only_and_marks_timeout() {
-        let snapshot = mock_snapshot(&test_monitors());
-        let mut round = Round::new(snapshot, "zh-CN".into(), true, true, true);
-        round.begin();
-        round.draw(0).unwrap();
-        round.placements[0] = Some(0);
-        // 池未清空、槽位未填满——超时结算绕过两个拒绝条件，只计已放好的。
-        let result = round.finish_timed_out().unwrap();
-        assert!(result.timed_out);
-        assert_eq!(result.correct, 1);
-        assert_eq!(result.total, round.total());
-        assert_eq!(result.elapsed_ms, time_limit_ms(round.total()));
-    }
-
-    #[test]
-    fn normal_finish_still_rejects_and_reports_no_timeout() {
-        let mut round = test_round();
-        round.draw(0).unwrap();
-        assert_eq!(round.finish().unwrap_err().code, "not_all_drawn");
-        let mut round = test_round();
-        let total = round.total();
-        for slot in 0..total {
-            round.draw(slot as u32).unwrap();
-        }
-        let result = round.finish().unwrap();
-        assert!(!result.timed_out);
-    }
-
-    #[test]
-    fn identity_placement_scores_100() {
-        let mut round = test_round();
-        round.placements = (0..round.total()).map(|i| Some(i as u32)).collect();
-        round.pool.clear();
-        let result = round.finish().unwrap();
-        assert_eq!(result.correct, round.total());
-        assert_eq!(result.accuracy, 100);
-    }
-
-    #[test]
-    fn moving_a_card_changes_accuracy() {
-        let mut round = test_round();
-        round.placements = (0..round.total()).map(|i| Some(i as u32)).collect();
-        round.pool.clear();
-        round.move_card(0, 1).unwrap();
-        let result = round.finish().unwrap();
-        assert_eq!(result.correct, round.total() - 2);
-    }
-
-    #[test]
-    fn move_requires_a_card() {
-        let mut round = test_round();
-        assert_eq!(round.move_card(0, 1).unwrap_err().code, "empty_slot");
-    }
-
-    #[test]
-    fn replay_clears_state() {
-        let mut round = test_round();
-        round.placements = (0..round.total()).map(|i| Some(i as u32)).collect();
-        round.pool.clear();
-        round.finish().unwrap();
-        round.replay().unwrap();
-        assert!(round.placements.iter().all(|slot| slot.is_none()));
-        assert_eq!(round.pool.len(), round.total());
-        assert_eq!(round.moves, 0);
-        assert!(round.result.is_none());
-        assert!(round.started_at_ms > 0);
-    }
-
-    #[test]
-    fn replay_before_finish_is_rejected() {
-        let mut round = test_round();
-        round.draw(0).unwrap();
-        assert_eq!(round.replay().unwrap_err().code, "round_not_finished");
-        // 进度未被清空。
-        assert_eq!(round.pool.len(), round.total() - 1);
-        assert!(round.placements[0].is_some());
-    }
-
-    #[test]
-    fn new_layout_uses_slot_positions() {
-        let mut round = test_round();
-        round.placements = (0..round.total()).map(|i| Some(i as u32)).collect();
-        round.pool.clear();
-        round.move_card(0, 1).unwrap();
-        round.finish().unwrap();
-        let positions = round.new_layout_positions().unwrap();
-        let slot1 = round.snapshot.icons[1].cell;
-        let icon0 = positions
-            .iter()
-            .find(|write| write.name == round.snapshot.icons[0].name)
-            .unwrap();
-        assert_eq!((icon0.x, icon0.y), (slot1.x, slot1.y));
-    }
-
-    #[test]
-    fn positions_carry_icon_names() {
-        let round = test_round();
-        let original = round.original_positions();
-        let icon0 = &round.snapshot.icons[0];
-        assert_eq!(original[0].name, icon0.name);
-        assert_eq!((original[0].x, original[0].y), (icon0.cell.x, icon0.cell.y));
-    }
-
-    #[test]
-    fn move_to_same_slot_does_not_count() {
-        let mut round = test_round();
-        round.placements = (0..round.total()).map(|i| Some(i as u32)).collect();
-        round.pool.clear();
-        round.move_card(2, 2).unwrap();
-        assert_eq!(round.moves, 0);
-    }
-}
+mod tests;

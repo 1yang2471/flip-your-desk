@@ -86,6 +86,8 @@ export interface PublicState {
   remaining: number;
   moves: number;
   startedAtMs: number;
+  studyMs: number;
+  flipMs: number;
   limitMs: number;
   finished: boolean;
   result: RoundResult | null;
