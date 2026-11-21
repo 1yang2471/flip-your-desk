@@ -7,8 +7,8 @@
  *
  * 运行：npm test（需先 npm run build）
  */
-import { spawn } from "node:child_process";
-import { mkdtempSync, readdirSync, rmSync, readFileSync, writeFileSync } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
+import { existsSync, mkdtempSync, readdirSync, rmSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -158,12 +158,29 @@ async function start() {
 }
 
 async function stop() {
+  // 先让 Edge 自己关闭：spawn 出来的 PID 只是启动器，真正的浏览器
+  // 进程会被重新挂到别的父进程下，单靠 taskkill /T 杀不到；
+  // Browser.close 会连同 renderer/GPU 一起收掉，profile 才解锁。
+  try {
+    await Promise.race([
+      send("Browser.close"),
+      new Promise((r) => setTimeout(r, 1000)),
+    ]);
+  } catch { /* 页面已关闭或 CDP 已断开 */ }
+  await new Promise((r) => setTimeout(r, 500));
   try { ws?.close(); } catch { /* 已关闭 */ }
-  proc.kill();
+  if (process.platform === "win32") {
+    spawnSync("taskkill", ["/PID", String(proc.pid), "/T", "/F"], { stdio: "ignore" });
+  } else {
+    proc.kill();
+  }
   await new Promise((r) => setTimeout(r, 300));
-  for (let i = 0; i < 20; i++) {
+  for (let i = 0; i < 30; i++) {
     try { rmSync(dir, { recursive: true, force: true }); break; }
-    catch { await new Promise((r) => setTimeout(r, 100)); }
+    catch { await new Promise((r) => setTimeout(r, 200)); }
+  }
+  if (existsSync(dir)) {
+    console.warn(`[test] 临时目录未清理（Edge 进程可能仍占用）: ${dir}`);
   }
 }
 
