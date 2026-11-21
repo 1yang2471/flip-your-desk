@@ -175,7 +175,7 @@ test("卡背与透明卡面占据相同尺寸", async () => {
     const back = document.getElementById('back');
     const face = document.getElementById('face');
     const backInner = document.querySelector('.card-back-inner');
-    const faceInner = document.querySelector('.is-photo');
+    const faceInner = document.getElementById('faceInner');
     // offset 是布局尺寸，不受 3D 翻转中途的投影影响。
     return { back: [back.offsetWidth, back.offsetHeight],
              face: [face.offsetWidth, face.offsetHeight],
@@ -189,7 +189,7 @@ test("卡背与透明卡面占据相同尺寸", async () => {
 
 test("翻出的透明卡面有可见的卡身份边缘（不遮挡图标）", async () => {
   const info = await fresh(`(() => {
-    const inner = document.querySelector('.is-photo');
+    const inner = document.getElementById('faceInner');
     const cs = getComputedStyle(inner, '::after');
     const img = document.querySelector('.face-image');
     return { edge: [cs.content, cs.borderTopWidth, cs.boxShadow, cs.backgroundImage],
@@ -202,7 +202,7 @@ test("翻出的透明卡面有可见的卡身份边缘（不遮挡图标）", as
 
 test("3D 翻转：两面共享透视容器且正面初始不可见", async () => {
   const info = await fresh(`(() => {
-    const face = document.querySelector('.is-photo');
+    const face = document.getElementById('faceInner');
     const cs = getComputedStyle(face);
     return { backface: cs.backfaceVisibility, transform: cs.transform };
   })()`);
@@ -213,7 +213,7 @@ test("3D 翻转：两面共享透视容器且正面初始不可见", async () =>
 test("3D 翻转：卡面创建后动画自动转到 0° 可见", async () => {
   const info = await fresh(`(async () => {
     await new Promise((r) => setTimeout(r, 400));
-    const inner = document.querySelector('.is-photo');
+    const inner = document.getElementById('faceInner');
     return { transform: getComputedStyle(inner).transform,
              animation: getComputedStyle(inner).animationName };
   })()`);
@@ -891,6 +891,16 @@ test("限时 HUD 使用共享 startedAtMs，不再依赖每窗本地起点", () 
   assert.doesNotMatch(f, /timingOut/, "移除永不复位的 timingOut");
 });
 
+test("状态订阅失败必须让覆盖窗初始化失败，不能静默继续", () => {
+  const f = readFileSync(join(ROOT, "src/overlay.ts"), "utf8");
+  const start = f.indexOf("private async bindEvents(");
+  const end = f.indexOf("private bindPresence(");
+  const block = f.slice(start, end);
+  assert.ok(block, "bindEvents 必须存在");
+  assert.match(block, /await listen<PublicState>/, "必须等待订阅完成再报告 ready");
+  assert.doesNotMatch(block, /catch\s*\(/, "不得吞掉 listen 失败（否则牌桌永远不更新）");
+});
+
 test("拖拽回原位/空白松手后仍抑制随后的 click", () => {
   const f = readFileSync(join(ROOT, "src/overlay.ts"), "utf8");
   const finish = f.slice(f.indexOf("private finishDrag"), f.indexOf("private globalPoint"));
@@ -1022,6 +1032,8 @@ test("版本号六处一致（package/tauri/Cargo/i18n/两份 README）", () => 
     .match(/^version\s*=\s*"([^"]+)"/m)?.[1];
   const i18n = readFileSync(join(ROOT, "src/i18n.ts"), "utf8")
     .match(/APP_VERSION\s*=\s*"([^"]+)"/)?.[1];
+  assert.ok(cargo, "Cargo.toml 必须显式声明 version（不能用 workspace 继承）");
+  assert.ok(i18n, "i18n.ts 必须有 APP_VERSION 常量");
   const readme = readFileSync(join(ROOT, "README.md"), "utf8");
   const readmeEn = readFileSync(join(ROOT, "README.en.md"), "utf8");
   assert.equal(tauri, pkg, "tauri.conf.json 版本");
@@ -1128,17 +1140,20 @@ test("记忆阶段：真实布局预览 + 输入锁 + 跳过与收尾都可达",
   assert.match(f, /api\.skipStudy\(\)/, "跳过走独立命令");
   for (const [name, slice] of [
     ["runExit", f.slice(f.indexOf("private runExit("), f.indexOf("private cancelExit"))],
-    ["destroy", methodBody(f, "  destroy")],
+    ["destroy", f.slice(f.indexOf("  destroy(): void"), f.indexOf("  private onKeyDown("))],
   ]) {
     assert.match(slice, /this\.endStudy\(\)/, `${name} 必须收掉预览与定时器`);
   }
   const rust = readFileSync(join(ROOT, "src-tauri/src/game.rs"), "utf8");
   assert.match(rust, /pub const FLIP_MS: u64 = 320/, "翻下过渡由后端定义");
   assert.match(rust, /flip_ms: FLIP_MS/, "翻下时长随状态下发");
+  assert.match(rust, /study_ms: study_duration_ms/, "记忆阶段时长随状态下发");
   const model = readFileSync(join(ROOT, "src-tauri/src/model.rs"), "utf8");
   assert.match(model, /pub flip_ms: u64/);
+  assert.match(model, /pub study_ms: u64/);
   const types = readFileSync(join(ROOT, "src/types.ts"), "utf8");
   assert.match(types, /flipMs: number/);
+  assert.match(types, /studyMs: number/);
 });
 
 test("记忆阶段文案中英齐备", () => {

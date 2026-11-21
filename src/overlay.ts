@@ -321,14 +321,12 @@ export class OverlayGame {
   private readonly onKeyDownBound = (event: KeyboardEvent) => this.onKeyDown(event);
 
   private async bindEvents(): Promise<void> {
-    try {
-      const unlisten = await listen<PublicState>("state-changed", (event) => {
-        this.applyState(event.payload, false);
-      });
-      this.unlisteners.push(unlisten);
-    } catch (error) {
-      console.error("state listener failed", error);
-    }
+    // 订阅失败必须让 init() 失败：否则覆盖窗会以“永远收不到 state-changed”
+    // 的僵尸状态报告 ready，玩家看到一副永远翻不开的牌且没有任何提示。
+    const unlisten = await listen<PublicState>("state-changed", (event) => {
+      this.applyState(event.payload, false);
+    });
+    this.unlisteners.push(unlisten);
     // drag-hover 由本窗口本地 applyHover 已足够；后端广播在多显示器下会与
     // 本地状态交错，这里不再订阅，避免 outline 闪烁。
     document.addEventListener("keydown", this.onKeyDownBound);

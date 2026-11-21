@@ -85,8 +85,11 @@ export interface PublicState {
   placements: (number | null)[];
   remaining: number;
   moves: number;
+  /** 正式开局时刻；记忆阶段期间它是未来时刻。 */
   startedAtMs: number;
+  /** 记忆阶段总时长（毫秒）；圆环收缩比例的分母。 */
   studyMs: number;
+  /** 卡面翻下的过渡时长（毫秒）；CSS --flip-ms 与收尾定时器共用。 */
   flipMs: number;
   limitMs: number;
   finished: boolean;
