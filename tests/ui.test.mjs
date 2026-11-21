@@ -60,7 +60,7 @@ function scene() {
     <button class="text-button" id="textAction" type="button">Copy</button>
   </div>
 </div>
-<div id="launcherProbe" style="width:540px">
+<div class="launcher-shell" id="launcherShell" style="width:540px;height:540px">
 <header class="launcher-head">
   <div class="brand"><span class="brand-mark"><span class="brand-mark-glyph">?</span></span>
     <div class="brand-text"><strong class="brand-name">Flip Your Desk</strong><span class="brand-tagline" id="tagline">A memory game played on your own desktop icons</span></div></div>
@@ -775,6 +775,31 @@ test("启动窗 header：语言按钮与 tagline 不换行、按钮组不收缩"
   assert.ok(out.langH <= 34, `语言按钮单行不竖排（实测高 ${out.langH}px）`);
   assert.equal(out.taglineWS, "nowrap", "tagline 单行，不再折成两行撑高头部");
   assert.equal(out.actionsShrink, "0", "按钮组不被压缩");
+});
+
+test("英文长 tagline 不会把头部按钮顶出窗口", async () => {
+  const out = await fresh(`(() => {
+    const shell = document.getElementById('launcherShell');
+    const close = document.querySelector('#headActions button:last-child');
+    const cs = getComputedStyle(shell);
+    const shellRect = shell.getBoundingClientRect();
+    const closeRect = close.getBoundingClientRect();
+    const tagline = document.getElementById('tagline');
+    return {
+      closeRight: closeRect.right,
+      limit: shellRect.right - parseFloat(cs.paddingRight),
+      taglineOverflow: getComputedStyle(tagline).textOverflow,
+      taglineTruncated: tagline.scrollWidth > Math.ceil(tagline.getBoundingClientRect().width),
+      actionsShrink: getComputedStyle(document.getElementById('headActions')).flexShrink,
+    };
+  })()`);
+  assert.ok(
+    out.closeRight <= out.limit + 0.5,
+    `关闭键右缘 ${out.closeRight.toFixed(1)} 超出内容区 ${out.limit.toFixed(1)}`,
+  );
+  assert.equal(out.taglineOverflow, "ellipsis", "长 tagline 应用省略号收缩，而不是顶出按钮");
+  assert.equal(out.taglineTruncated, true, "长 tagline 真的被截断（scrollWidth > 可见宽度）");
+  assert.equal(out.actionsShrink, "0", "按钮组不收缩");
 });
 
 test("选中卡只有一圈金边：保留键盘路径，卡片不画焦点环", async () => {
